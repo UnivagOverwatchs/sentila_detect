@@ -494,3 +494,41 @@ def test_hash_de_senha():
     assert auth.hash_senha(SENHA) != h  # sal aleatório
     assert auth.verificar_senha(SENHA, h) and not auth.verificar_senha("outra", h)
     assert not auth.verificar_senha(SENHA, "lixo") and not auth.verificar_senha(SENHA, "scrypt$a$b$c$d$e")
+
+
+# ------------------------------------------------------------------ Modo painel (servidor sem câmera, ex.: VPS)
+def test_modo_painel_serve_a_api_sem_camera(tmp_path):
+    from sentinela_api.servico_visao import ServicoRemoto
+
+    banco = Banco(str(tmp_path / "painel.db"), usar_postgres=False)
+    banco.garantir_camera("Quarto 1", "Térreo", "0")  # registrada pelo computador que detecta
+    cliente = TestClient(criar_app(banco, ServicoRemoto(banco)))
+
+    status = cliente.get("/api/status").json()
+    assert status["modo"] == "painel" and status["camera_online"] and status["camera_id"] == 1
+    assert cliente.get("/api/quadro").content[:2] == b"\xff\xd8"  # quadro de aviso, em JPEG
+
+    banco.registrar_alerta(1, 1, "queda", 0.9, None)  # alerta gravado por OUTRO computador
+    assert cliente.get("/api/status").json()["pendentes"] == 1
+    assert cliente.put("/api/cameras/1", json={"ativa": False}).status_code == 200
+
+
+def test_modo_painel_entrega_alerta_novo_pelo_websocket(tmp_path):
+    from sentinela_api.servico_visao import ServicoRemoto
+
+    banco = Banco(str(tmp_path / "painel_ws.db"), usar_postgres=False)
+    banco.garantir_camera("Quarto 1", "Térreo", "0")
+    cliente = TestClient(criar_app(banco, ServicoRemoto(banco)))
+    with cliente.websocket_connect("/api/ws") as ws:
+        assert ws.receive_json()["tipo"] == "status"
+        banco.registrar_alerta(1, 1, "queda", 0.9, None)
+        tipos = [ws.receive_json()["tipo"] for _ in range(4)]
+        assert "alerta" in tipos
+
+
+def test_modo_painel_sem_nenhuma_camera_cadastrada(tmp_path):
+    from sentinela_api.servico_visao import ServicoRemoto
+
+    banco = Banco(str(tmp_path / "vazio.db"), usar_postgres=False)
+    cliente = TestClient(criar_app(banco, ServicoRemoto(banco)))
+    assert cliente.get("/api/status").status_code == 200

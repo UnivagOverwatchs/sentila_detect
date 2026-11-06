@@ -175,3 +175,33 @@ class ServicoVisao:
         finally:
             captura.fechar()
             estimador.fechar()
+
+
+class ServicoRemoto:
+    """Modo painel: servidor SEM câmera (ex.: VPS). Só mostra o que outro computador gravou no banco.
+
+    Faz o papel do ServicoVisao para a API: não captura vídeo, não detecta nada e não grava alertas.
+    Quem detecta é o computador com a câmera, que escreve no mesmo banco; o painel lê pelo WebSocket.
+    Limitações atuais: sem vídeo ao vivo e sem foto dos alertas (os arquivos ficam no outro computador).
+    """
+
+    def __init__(self, banco: Banco):
+        self.banco = banco
+        self.cfg_queda = ConfigQueda()  # a sensibilidade vai para o banco; o detector remoto a lê ao reiniciar
+        self.ativa = True
+        cameras = banco.listar_cameras()
+        self.camera: Dict[str, Any] = cameras[0] if cameras else {"id": 0, "nome": "Câmera remota", "local": "", "ativa": True}
+        self._jpeg = ServicoVisao._codificar(quadro_mensagem("Camera em outro computador"))
+
+    def iniciar(self) -> None:
+        pass
+
+    def parar(self) -> None:
+        pass
+
+    def jpeg_atual(self) -> bytes:
+        return self._jpeg
+
+    def status(self) -> Dict[str, Any]:
+        return {"fps": 0.0, "pessoas": 0, "estado": "normal", "erro": None, "camera_online": True,
+                "camera_ativa": True, "camera_id": self.camera["id"], "modo": "painel"}
