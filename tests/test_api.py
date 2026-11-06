@@ -494,3 +494,43 @@ def test_hash_de_senha():
     assert auth.hash_senha(SENHA) != h  # sal aleatório
     assert auth.verificar_senha(SENHA, h) and not auth.verificar_senha("outra", h)
     assert not auth.verificar_senha(SENHA, "lixo") and not auth.verificar_senha(SENHA, "scrypt$a$b$c$d$e")
+# ------------------------------------------------- aviso ao notificador de WhatsApp (outro servidor)
+def test_notificador_remoto_envia_post_com_token():
+    import threading
+    from sentinela_api.notificador_remoto import NotificadorRemoto
+
+    chamadas, pronto = [], threading.Event()
+
+    class Resposta:
+        status_code = 202
+
+    def falso_post(url, json, headers, timeout):
+        chamadas.append((url, json, headers))
+        pronto.set()
+        return Resposta()
+
+    n = NotificadorRemoto("http://zap:8100/", "tok", enviar=falso_post)
+    n.avisar({"id": 42})
+    assert pronto.wait(2)
+    assert chamadas == [("http://zap:8100/notificar", {"alerta_id": 42}, {"Authorization": "Bearer tok"})]
+
+
+def test_notificador_remoto_sem_configuracao_nao_chama():
+    from sentinela_api.notificador_remoto import NotificadorRemoto
+
+    def falso_post(*a, **k):
+        raise AssertionError("não deveria chamar")
+
+    n = NotificadorRemoto("", "", enviar=falso_post)
+    assert not n.configurado
+    n.avisar({"id": 1})
+
+
+def test_notificador_remoto_fora_do_ar_nao_derruba():
+    import requests
+    from sentinela_api.notificador_remoto import NotificadorRemoto
+
+    def falso_post(*a, **k):
+        raise requests.ConnectionError("sem rede")
+
+    NotificadorRemoto("http://zap:8100", "tok", enviar=falso_post)._post(5)  # só registra no log

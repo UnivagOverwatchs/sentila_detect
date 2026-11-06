@@ -63,9 +63,11 @@ class ServicoVisao:
                  criar_estimador: Callable = _criar_estimador_padrao,
                  desenhar: Callable = _desenhar_padrao,
                  notificador: Optional[NotificadorAlertas] = None,
-                 servico_push=None):
+                 servico_push=None,
+                 notificador_remoto=None):
         self.banco = banco
         self.servico_push = servico_push  # sentinela_api.push.ServicoPush (opcional)
+        self.notificador_remoto = notificador_remoto  # sentinela_api.notificador_remoto (WhatsApp, opcional)
         self.camera = camera
         self.fonte = fonte
         self.cfg_queda = cfg_queda or ConfigQueda()
@@ -166,6 +168,8 @@ class ServicoVisao:
                     alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho)
                     if self.servico_push is not None:
                         self.servico_push.avisar(alerta)  # push para os celulares, mesmo com o app fechado
+                    if self.notificador_remoto is not None:
+                        self.notificador_remoto.avisar(alerta)  # WhatsApp para os contatos (outro servidor)
 
                 estados = {p.estado for p in pessoas}
                 estado_geral = ("alerta" if Estado.ALERTA in estados

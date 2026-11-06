@@ -28,6 +28,7 @@ load_dotenv()
 
 from sentinela_api.app import criar_app  # noqa: E402
 from sentinela_api.banco import Banco  # noqa: E402
+from sentinela_api.notificador_remoto import NotificadorRemoto  # noqa: E402
 from sentinela_api.push import ServicoPush  # noqa: E402
 from sentinela_api.servico_visao import ServicoVisao  # noqa: E402
 
@@ -83,7 +84,14 @@ def main() -> None:
     if not push.configurado:
         print("[Sentinela] Push desativado: defina VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env "
               "(python -m sentinela_api.push --gerar-chaves).")
-    servico = ServicoVisao(banco, camera, args.fonte, servico_push=push)
+    whatsapp = NotificadorRemoto()
+    if whatsapp.configurado:
+        print(f"[Sentinela] WhatsApp: avisando o notificador em {whatsapp.url}")
+        if os.getenv("WHATSAPP_URL"):
+            print("[Sentinela] Atenção: WHATSAPP_URL também está definido; deixe vazio para não enviar em dobro.")
+    else:
+        print("[Sentinela] WhatsApp: NOTIFICADOR_URL/NOTIFICADOR_TOKEN não configurados (sem envio imediato).")
+    servico = ServicoVisao(banco, camera, args.fonte, servico_push=push, notificador_remoto=whatsapp)
     servico.iniciar()
 
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):
