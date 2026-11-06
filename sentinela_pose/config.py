@@ -71,6 +71,10 @@ class ConfigQueda:
     velocidade_queda: float = field(default_factory=lambda: _env_float("QUEDA_VELOCIDADE", 1.2))
     # Janela usada para medir a velocidade de descida.
     janela_velocidade: float = field(default_factory=lambda: _env_float("QUEDA_JANELA_VELOCIDADE", 0.5))
+    # QUEDA LENTA: o quadril desceu pelo menos X "comprimentos de tronco" dentro da janela
+    # e a pessoa terminou deitada (ex.: escorregou da cadeira, foi "desabando" apoiada na parede).
+    desnivel_queda_lenta: float = field(default_factory=lambda: _env_float("QUEDA_DESNIVEL_LENTA", 0.7))
+    janela_queda_lenta: float = field(default_factory=lambda: _env_float("QUEDA_JANELA_LENTA", 5.0))
     # Uma queda brusca vale como "impacto" se a pessoa deitar até X s depois.
     janela_impacto: float = field(default_factory=lambda: _env_float("QUEDA_JANELA_IMPACTO", 2.0))
     # Tempo deitado, após impacto, para confirmar a queda.

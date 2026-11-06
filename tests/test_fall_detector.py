@@ -88,15 +88,39 @@ def test_queda_brusca_gera_alerta_queda(detector):
     assert [a.tipo for a in alertas] == ["queda"]
 
 
-def test_deitar_devagar_alerta_no_chao_so_apos_tempo(detector):
-    # Desce em 4 s (lento, como deitar no chão de propósito ou queda lenta).
+def test_queda_lenta_gera_alerta_queda(detector):
+    # Desce em 4 s (escorregou devagar até o chão): sem velocidade de impacto, mas é queda.
     deitado = pose_sintetica(320, 300, 90)
-    seq = repetir(pose_sintetica(320, 180, 0), 1) + cair(4.0) + repetir(deitado, 5)
+    seq = repetir(pose_sintetica(320, 180, 0), 1) + cair(4.0) + repetir(deitado, 3)
     alertas, _ = rodar(detector, seq)
-    assert alertas == []  # ainda não passou QUEDA_TEMPO_NO_CHAO (8 s)
+    assert [a.tipo for a in alertas] == ["queda"]
 
-    alertas, _ = rodar(detector, repetir(deitado, 5), t0=len(seq) / FPS)
+
+def test_queda_lenta_alerta_rapido_nao_espera_tempo_no_chao(detector):
+    # Confirmação da queda lenta usa QUEDA_TEMPO_CONFIRMA (2 s), não os 8 s de "no chão".
+    deitado = pose_sintetica(320, 300, 90)
+    seq = repetir(pose_sintetica(320, 180, 0), 1) + cair(4.0)
+    rodar(detector, seq)
+    alertas, _ = rodar(detector, repetir(deitado, 2.5), t0=len(seq) / FPS)
+    assert [a.tipo for a in alertas] == ["queda"]
+
+
+def test_ja_deitado_sem_descida_alerta_no_chao_so_apos_tempo(detector):
+    # Entra na imagem já deitado (não vimos a descida): espera QUEDA_TEMPO_NO_CHAO (8 s).
+    deitado = pose_sintetica(320, 300, 90)
+    alertas, _ = rodar(detector, repetir(deitado, 6))
+    assert alertas == []
+    alertas, _ = rodar(detector, repetir(deitado, 5), t0=6.0)
     assert [a.tipo for a in alertas] == ["pessoa_no_chao"]
+
+
+def test_deitar_inclinado_sem_descer_nao_e_queda_lenta(detector):
+    # Tronco inclina até deitado mas o quadril quase não desce (ex.: reclinar no sofá da sala):
+    # sem desnível, fica NO_CHAO e só alerta após o tempo longo.
+    n = 2 * FPS
+    reclinar = [pose_sintetica(320, 200 + 20 * k / n, 90 * k / n) for k in range(1, n + 1)]
+    alertas, _ = rodar(detector, repetir(pose_sintetica(320, 200, 0), 1) + reclinar + repetir(pose_sintetica(320, 220, 90), 4))
+    assert alertas == []
 
 
 def test_levantar_rapido_cancela(detector):
@@ -170,8 +194,8 @@ def test_id_que_pisca_nao_gera_alerta(detector):
     assert alertas == []
 
 
-def test_no_chao_sem_impacto_nao_continua_sem_pose(detector):
-    # Deitou devagar e depois sumiu da imagem: sem ter visto queda, não alerta às cegas.
-    seq = repetir(pose_sintetica(320, 180, 0), 1) + cair(4.0) + [None] * (12 * FPS)
+def test_no_chao_sem_descida_nao_continua_sem_pose(detector):
+    # Apareceu já deitado e depois sumiu da imagem: sem ter visto a descida, não alerta às cegas.
+    seq = repetir(pose_sintetica(320, 300, 90), 3) + [None] * (12 * FPS)
     alertas, _ = rodar(detector, seq)
     assert alertas == []
