@@ -171,7 +171,13 @@ VAPID_CONTATO=mailto:admin@example.com   # e-mail/URL válidos: a Apple recusa (
 LOGIN_OBRIGATORIO=0
 # COOKIE_SEGURO=1   # padrão 1 quando o login é obrigatório (cookie só trafega por HTTPS ou localhost)
 
-# WhatsApp (API local já usada pelo projeto)
+# WhatsApp: serviço sentinela_whatsapp (pode estar em outro servidor).
+# O Sentinela avisa o notificador assim que grava um alerta; ele envia para os contatos de emergência.
+NOTIFICADOR_URL=http://ip-do-servidor-whatsapp:8100
+NOTIFICADOR_TOKEN=mesmo valor de NOTIF_TOKEN no notificador
+
+# Envio antigo (um número fixo, mesma máquina) — deixe vazio quando usar o notificador
+
 WHATSAPP_URL=http://localhost:3000/client/sendMessage/ABCD
 WHATSAPP_CHAT_ID=55DDDNUMERO@c.us
 ALERTA_COOLDOWN=30
