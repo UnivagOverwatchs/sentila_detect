@@ -4,9 +4,11 @@
  *   - Câmeras cadastradas: ligar/desligar o monitoramento.
  *   - Contatos de emergência: usados no botão "Ligar" da tela de alerta.
  *   - Este aparelho: nome do cuidador e permissão de notificações.
+ *   - Aparelhos que recebem alertas: lista dos celulares cadastrados para o push (renomear/remover).
  */
 import { useEffect, useState } from "react";
 import { IconeFechar, IconeMais, IconeSino, IconeTelefone } from "../components/Icones.jsx";
+import { api } from "../services/api.js";
 import { pedirPermissaoNotificacao } from "../services/aviso.js";
 import { ativarPush, pushDisponivel } from "../services/push.js";
 
@@ -31,6 +33,34 @@ export function Configuracoes({
   const [formAberto, setFormAberto] = useState(false);
   const [erroContato, setErroContato] = useState("");
   const [pushEstado, setPushEstado] = useState("");
+  const [aparelhos, setAparelhos] = useState([]);
+
+  async function carregarAparelhos() {
+    try {
+      setAparelhos(await api.aparelhos());
+    } catch {
+      /* sem rede: mantém a lista anterior */
+    }
+  }
+
+  useEffect(() => {
+    carregarAparelhos();
+  }, [pushEstado]);
+
+  async function renomear(aparelho) {
+    const nome = window.prompt("Nome do aparelho", aparelho.nome ?? "");
+    if (nome && nome.trim()) {
+      await api.renomearAparelho(aparelho.id, nome.trim());
+      carregarAparelhos();
+    }
+  }
+
+  async function removerAparelho(aparelho) {
+    if (window.confirm(`Remover "${aparelho.nome ?? "aparelho"}"? Ele deixa de receber alertas.`)) {
+      await api.removerAparelho(aparelho.id);
+      carregarAparelhos();
+    }
+  }
   const [permissao, setPermissao] = useState("Notification" in window ? Notification.permission : "indisponivel");
 
   useEffect(() => {
@@ -181,6 +211,40 @@ export function Configuracoes({
           <p className="erro">Não foi possível ativar o aviso com o app fechado (precisa de HTTPS e do push configurado no servidor).</p>
         )}
         {pushEstado === "ativo" && <p className="dica">Pronto: este aparelho também recebe alertas com o app fechado.</p>}
+      </section>
+
+      <section className="cartao">
+        <header className="cartao__cabecalho">
+          <h2>Aparelhos que recebem alertas</h2>
+          <p>Celulares cadastrados para o aviso com o app fechado</p>
+        </header>
+        {aparelhos.length === 0 ? (
+          <p className="dica">Nenhum aparelho cadastrado ainda. Toque em &quot;Ativar notificações&quot; no celular.</p>
+        ) : (
+          <ul className="lista-config">
+            {aparelhos.map((a) => (
+              <li key={a.id}>
+                <span className="avatar avatar--claro">
+                  <IconeSino tamanho={14} />
+                </span>
+                <div className="lista-config__expande">
+                  <strong>{a.nome ?? "Aparelho"}</strong>
+                  <small className="mono">
+                    {a.ultimo_resultado
+                      ? `Último aviso: ${a.ultimo_resultado === "OK" ? "enviado" : "falhou"} · ${String(a.ultimo_envio).replace("T", " ").slice(0, 16)}`
+                      : "Nenhum aviso enviado ainda"}
+                  </small>
+                </div>
+                <button className="botao botao--fantasma" onClick={() => renomear(a)}>
+                  Renomear
+                </button>
+                <button className="botao-icone" onClick={() => removerAparelho(a)} aria-label={`Remover ${a.nome ?? "aparelho"}`}>
+                  <IconeFechar tamanho={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

@@ -7,7 +7,9 @@ Como funciona
   3. Quando um alerta é gravado, `avisar()` manda uma mensagem para cada assinatura; o service worker
      do celular recebe e mostra a notificação.
 
-Chaves VAPID: VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env. Gere com:
+Chaves VAPID: VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env. VAPID_CONTATO precisa ser um e-mail ou URL
+válidos (ex.: mailto:admin@example.com): a Apple recusa com 403 BadJwtToken se ele for inválido (ex.: ".local").
+Cada tentativa de envio fica registrada na tabela envio_push (resultado OK ou FALHA). Gere com:
     python -m sentinela_api.push --gerar-chaves
 O celular só aceita push em páginas HTTPS (localhost também vale, para testes no próprio PC).
 """
@@ -16,6 +18,7 @@ import base64
 import json
 import os
 import threading
+import time
 from typing import Any, Dict, Optional
 
 from .banco import Banco
@@ -47,8 +50,9 @@ class ServicoPush:
         self.banco = banco
         self.chave_publica = chave_publica or os.getenv("VAPID_PUBLIC_KEY", "")
         self._chave_privada = chave_privada or os.getenv("VAPID_PRIVATE_KEY", "")
-        self._contato = contato or os.getenv("VAPID_CONTATO", "mailto:admin@sentinela.local")
+        self._contato = contato or os.getenv("VAPID_CONTATO", "mailto:admin@example.com")
         self._enviar = enviar_fn  # injetável nos testes
+        self._espera_retentativa_s = 2.0
 
     @property
     def configurado(self) -> bool:
@@ -66,23 +70,42 @@ class ServicoPush:
             "corpo": f"{alerta['camera_nome']} · agora",
             "alerta_id": alerta["id"],
         })
+        alerta_id = alerta["id"] if isinstance(alerta["id"], int) else None
         for sub in self.banco.listar_assinaturas():
-            self._enviar_uma(sub, mensagem)
+            self._enviar_uma(sub, mensagem, alerta_id)
 
-    def _enviar_uma(self, sub: Dict[str, Any], mensagem: str) -> None:
+    def _enviar_uma(self, sub: Dict[str, Any], mensagem: str, alerta_id: Optional[int] = None) -> None:
+        """Tenta enviar (com 1 nova tentativa em erro passageiro) e registra o resultado em envio_push."""
         enviar = self._enviar
         if enviar is None:
-            from pywebpush import WebPushException, webpush
+            from pywebpush import webpush
             enviar = webpush
+        codigo, detalhe = None, None
+        for tentativa in (1, 2):
+            try:
+                enviar(subscription_info={"endpoint": sub["endpoint"],
+                                          "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
+                       data=mensagem, vapid_private_key=self._chave_privada,
+                       vapid_claims={"sub": self._contato}, ttl=3600)
+                self._registrar(sub, alerta_id, "OK", None, None)
+                return
+            except Exception as erro:  # noqa: BLE001
+                codigo = getattr(getattr(erro, "response", None), "status_code", None)
+                detalhe = f"{type(erro).__name__}: {erro}"
+                if codigo in (404, 410):  # o aparelho cancelou ou a assinatura expirou: não adianta insistir
+                    self.banco.remover_assinatura(sub["endpoint"])
+                    break
+                if tentativa == 1:
+                    time.sleep(self._espera_retentativa_s)
+        print(f"[Push] falha ao enviar ({codigo or 'erro'}): {detalhe}")
+        self._registrar(sub, alerta_id, "FALHA", codigo, detalhe)
+
+    def _registrar(self, sub: Dict[str, Any], alerta_id: Optional[int], resultado: str,
+                   codigo: Optional[int], detalhe: Optional[str]) -> None:
         try:
-            enviar(subscription_info={"endpoint": sub["endpoint"], "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
-                   data=mensagem, vapid_private_key=self._chave_privada,
-                   vapid_claims={"sub": self._contato}, ttl=3600)
-        except Exception as erro:  # noqa: BLE001
-            codigo = getattr(getattr(erro, "response", None), "status_code", None)
-            if codigo in (404, 410):  # o aparelho cancelou ou a assinatura expirou
-                self.banco.remover_assinatura(sub["endpoint"])
-            print(f"[Push] falha ao enviar ({codigo or type(erro).__name__}): {erro}")
+            self.banco.registrar_envio_push(sub.get("id"), alerta_id, resultado, codigo, detalhe)
+        except Exception as erro:  # noqa: BLE001 - registrar não pode derrubar o aviso
+            print(f"[Push] não foi possível registrar o envio: {erro}")
 
 
 if __name__ == "__main__":

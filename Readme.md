@@ -165,7 +165,7 @@ DATABASE_URL=postgresql://usuario:senha@servidor:5432/nome_do_banco
 # Web Push (gere com: python -m sentinela_api.push --gerar-chaves)
 VAPID_PUBLIC_KEY=
 VAPID_PRIVATE_KEY=
-VAPID_CONTATO=mailto:admin@exemplo.com
+VAPID_CONTATO=mailto:admin@example.com   # e-mail/URL válidos: a Apple recusa (403) se for inválido, ex. ".local"
 
 # WhatsApp (API local já usada pelo projeto)
 WHATSAPP_URL=http://localhost:3000/client/sendMessage/ABCD
@@ -240,6 +240,7 @@ Os testes sempre usam um SQLite temporário, nunca o banco do servidor.
 - **Corpo inteiro:** ombros e quadril precisam aparecer; pessoa cortada pela borda é ignorada de propósito.
 - **Cama x chão:** a câmera não diferencia; deitar na cama devagar pode gerar alerta de queda. Próximo passo: marcar a área da cama na imagem.
 - **Sem login ainda:** use `--host 0.0.0.0` só em rede interna confiável.
+- **Aparelhos e envios de push:** *Configurações → Aparelhos que recebem alertas* lista, renomeia e remove os celulares cadastrados e mostra o resultado do último aviso. Cada tentativa de envio fica na tabela `envio_push` (OK/FALHA); o envio tenta de novo uma vez em erro passageiro e remove aparelhos expirados.
 - **Notificação com o app fechado:** Web Push (VAPID) implementado; exige HTTPS no celular. Gere as chaves com `python -m sentinela_api.push --gerar-chaves` e ative em *Configurações → Ativar notificações*.
 - **Uma câmera por servidor** nesta versão.
 

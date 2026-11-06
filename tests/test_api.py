@@ -206,3 +206,116 @@ def test_assinatura_exige_https(ambiente):
     app_push = TestClient(criar_app(banco, servico, None, ServicoPush(banco, "a", "b")))
     ruim = {"endpoint": "http://inseguro.exemplo/x", "keys": {"p256dh": "k", "auth": "a"}}
     assert app_push.post("/api/push/assinaturas", json=ruim).status_code == 422
+
+
+# ------------------------------------------------------------------ Push confiável: envios, aparelhos, contato VAPID
+def _assinatura(sufixo="1", nome=None):
+    corpo = {"endpoint": f"https://push.exemplo/{sufixo}", "keys": {"p256dh": "chave", "auth": "segredo"}}
+    if nome:
+        corpo["nome"] = nome
+    return corpo
+
+
+def test_contato_vapid_padrao_e_valido_para_a_apple(ambiente, monkeypatch):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    monkeypatch.delenv("VAPID_CONTATO", raising=False)
+    assert ServicoPush(banco, "a", "b")._contato == "mailto:admin@example.com"
+
+
+def test_envio_ok_e_falha_ficam_registrados(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, servico, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/ok", "k", "a", "Aparelho OK")
+    resultados = {"https://push.exemplo/ok": None}
+
+    def enviar(subscription_info, **_):
+        erro = resultados[subscription_info["endpoint"]]
+        if erro:
+            raise erro
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    alerta = banco.registrar_alerta(1, 1, "queda", 0.9, None)
+    push._enviar_para_todos(alerta)
+    assert [e["resultado"] for e in banco.listar_envios_push()] == ["OK"]
+
+    resultados["https://push.exemplo/ok"] = RuntimeError("rede caiu")
+    push._enviar_para_todos(alerta)
+    ultimo = banco.listar_envios_push()[0]
+    assert ultimo["resultado"] == "FALHA" and "rede caiu" in ultimo["detalhe"]
+    aparelho = banco.listar_aparelhos()[0]
+    assert aparelho["nome"] == "Aparelho OK" and aparelho["ultimo_resultado"] == "FALHA"
+
+
+def test_envio_tenta_de_novo_uma_vez(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/r", "k", "a")
+    chamadas = []
+
+    def enviar(**_):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            raise RuntimeError("falha passageira")
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert len(chamadas) == 2
+    assert banco.listar_envios_push()[0]["resultado"] == "OK"
+
+
+def test_aparelho_expirado_410_e_removido(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/velho", "k", "a")
+
+    class Expirou(Exception):
+        class response:  # noqa: N801
+            status_code = 410
+
+    def enviar(**_):
+        raise Expirou()
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert banco.listar_assinaturas() == []
+
+
+def test_api_lista_renomeia_e_remove_aparelhos(ambiente):
+    banco, _, cliente = ambiente
+    assert cliente.post("/api/push/assinaturas", json=_assinatura("a", "iPhone")).status_code == 204
+    assert cliente.post("/api/push/assinaturas", json=_assinatura("b")).status_code == 204
+    lista = cliente.get("/api/push/aparelhos").json()
+    assert [a["nome"] for a in lista] == ["iPhone", None]
+    assert "endpoint" not in lista[0] and "auth" not in lista[0]  # segredos não vão para a tela
+
+    assert cliente.patch(f"/api/push/aparelhos/{lista[1]['id']}", json={"nome": "Tablet"}).status_code == 200
+    assert cliente.patch("/api/push/aparelhos/999", json={"nome": "x"}).status_code == 404
+
+    assert cliente.delete(f"/api/push/aparelhos/{lista[0]['id']}").status_code == 204
+    assert cliente.delete(f"/api/push/aparelhos/{lista[0]['id']}").status_code == 404
+    assert [a["nome"] for a in cliente.get("/api/push/aparelhos").json()] == ["Tablet"]
+    assert cliente.get("/api/push/envios").status_code == 200
+
+
+def test_banco_antigo_ganha_coluna_nome(tmp_path):
+    import sqlite3
+
+    caminho = str(tmp_path / "antigo.db")
+    con = sqlite3.connect(caminho)
+    con.execute("CREATE TABLE assinatura_push (id INTEGER PRIMARY KEY AUTOINCREMENT, endpoint TEXT NOT NULL UNIQUE, "
+                "p256dh VARCHAR(255) NOT NULL, auth VARCHAR(255) NOT NULL, criada_em TIMESTAMP NOT NULL)")
+    con.execute("INSERT INTO assinatura_push (endpoint, p256dh, auth, criada_em) VALUES ('https://x/1', 'k', 'a', '2026-01-01')")
+    con.commit()
+    con.close()
+
+    banco = Banco(caminho, usar_postgres=False)  # migra sem perder o aparelho já cadastrado
+    assert banco.listar_aparelhos()[0]["nome"] is None
+    banco.renomear_aparelho(1, "Celular")
+    assert banco.listar_aparelhos()[0]["nome"] == "Celular"

@@ -18,6 +18,8 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/push/chave          chave pública VAPID (a PWA usa para assinar)
     POST   /api/push/assinaturas    registra o aparelho para receber push
     DELETE /api/push/assinaturas    cancela
+    GET    /api/push/aparelhos      aparelhos cadastrados (PATCH/DELETE /{id} renomeia/remove)
+    GET    /api/push/envios         últimos envios de push (OK/FALHA)
     WS     /api/ws                  tempo real: status a cada 1 s + alertas novos na hora
 
 Ainda sem login/JWT (previsto na API Node.js). Por isso o servidor escuta só em
@@ -65,6 +67,11 @@ class ChavesPush(BaseModel):
 class AssinaturaPush(BaseModel):
     endpoint: str = Field(min_length=10, max_length=2000, pattern=r"^https://")
     keys: ChavesPush
+    nome: Optional[str] = Field(default=None, max_length=80)
+
+
+class RenomearAparelho(BaseModel):
+    nome: str = Field(min_length=1, max_length=80)
 
 
 class RemoverAssinatura(BaseModel):
@@ -187,7 +194,27 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
 
     @app.post("/api/push/assinaturas", status_code=204)
     def assinar_push(dados: AssinaturaPush):
-        banco.salvar_assinatura(dados.endpoint, dados.keys.p256dh, dados.keys.auth)
+        banco.salvar_assinatura(dados.endpoint, dados.keys.p256dh, dados.keys.auth,
+                                dados.nome.strip() if dados.nome and dados.nome.strip() else None)
+
+    @app.get("/api/push/aparelhos")
+    def listar_aparelhos():
+        return banco.listar_aparelhos()
+
+    @app.patch("/api/push/aparelhos/{aparelho_id}")
+    def renomear_aparelho(aparelho_id: int, dados: RenomearAparelho):
+        if not banco.renomear_aparelho(aparelho_id, dados.nome.strip()):
+            raise HTTPException(404, "Aparelho não encontrado")
+        return {"id": aparelho_id, "nome": dados.nome.strip()}
+
+    @app.delete("/api/push/aparelhos/{aparelho_id}", status_code=204)
+    def remover_aparelho(aparelho_id: int):
+        if not banco.remover_aparelho(aparelho_id):
+            raise HTTPException(404, "Aparelho não encontrado")
+
+    @app.get("/api/push/envios")
+    def listar_envios(limite: int = 50):
+        return banco.listar_envios_push(min(max(limite, 1), 200))
 
     @app.delete("/api/push/assinaturas", status_code=204)
     def cancelar_push(dados: RemoverAssinatura):
