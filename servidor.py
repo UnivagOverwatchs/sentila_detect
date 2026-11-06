@@ -89,8 +89,17 @@ def main() -> None:
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):
         print("[Sentinela] Interface não compilada. Rode:  cd web && npm install && npm run build")
 
+    exigir_login = os.getenv("LOGIN_OBRIGATORIO", "0") == "1"
+    # Cookie "Secure" só vai por HTTPS (ou localhost); com login ativo, é o padrão.
+    cookie_seguro = os.getenv("COOKIE_SEGURO", "1" if exigir_login else "0") == "1"
+    if exigir_login and banco.contar_usuarios() == 0:
+        print("[Sentinela] ATENÇÃO: login obrigatório, mas não há usuários. Crie o administrador com:\n"
+              "            python -m sentinela_api.usuarios criar --usuario admin --nome Administrador --papel ADMIN")
+    if not exigir_login and args.host != "127.0.0.1":
+        print("[Sentinela] ATENÇÃO: acessível pela rede e SEM login. Defina LOGIN_OBRIGATORIO=1 no .env.")
     print(f"[Sentinela] Abra http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.porta}")
-    config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB, push), host=args.host, port=args.porta,
+    config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB, push, exigir_login=exigir_login,
+                                      cookie_seguro=cookie_seguro), host=args.host, port=args.porta,
                             log_level="warning", timeout_graceful_shutdown=2)
     try:
         ServidorUvicorn(config, servico).run()

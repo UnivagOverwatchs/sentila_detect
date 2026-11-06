@@ -20,7 +20,7 @@ const SELO = {
   camera: { classe: "selo--atencao", texto: "Câmera offline" },
 };
 
-export function Layout({ pagina, irPara, titulo, subtitulo, estado, cameras, nomeCuidador, children }) {
+export function Layout({ pagina, irPara, titulo, subtitulo, estado, cameras, nomeCuidador, rotuloPapel = "Cuidador responsável", aoSair, children }) {
   const selo = SELO[estado] ?? SELO.normal;
   return (
     <div className="app">
@@ -58,8 +58,13 @@ export function Layout({ pagina, irPara, titulo, subtitulo, estado, cameras, nom
           <span className="avatar">{nomeCuidador.charAt(0).toUpperCase()}</span>
           <div>
             <strong>{nomeCuidador}</strong>
-            <small>Cuidador responsável</small>
+            <small>{rotuloPapel}</small>
           </div>
+          {aoSair && (
+            <button className="botao botao--fantasma lateral__sair" onClick={aoSair}>
+              Sair
+            </button>
+          )}
         </div>
       </aside>
 

@@ -319,3 +319,178 @@ def test_banco_antigo_ganha_coluna_nome(tmp_path):
     assert banco.listar_aparelhos()[0]["nome"] is None
     banco.renomear_aparelho(1, "Celular")
     assert banco.listar_aparelhos()[0]["nome"] == "Celular"
+
+
+# ------------------------------------------------------------------ Login, papéis e sessão
+SENHA = "uma-senha-bem-longa-1"
+
+
+@pytest.fixture
+def ambiente_login(tmp_path):
+    from sentinela_api import autenticacao as auth
+
+    banco = Banco(str(tmp_path / "login.db"), usar_postgres=False)
+    camera = banco.garantir_camera("Quarto teste", "Térreo", "fake")
+    servico = ServicoVisao(banco, camera, "fake", cfg_queda=ConfigQueda(),
+                           criar_captura=CapturaFalsa, criar_estimador=EstimadorFalso,
+                           desenhar=lambda quadro, pessoas, fps: quadro,
+                           notificador=NotificadorAlertas(pasta=str(tmp_path / "alertas"), cooldown_s=0))
+    relogio = [0.0]
+    limitador = auth.LimitadorLogin(max_erros=3, bloqueio_s=60, agora=lambda: relogio[0])
+    app = criar_app(banco, servico, None, None, exigir_login=True, limitador=limitador)
+    banco.criar_usuario("admin", "Administrador", auth.hash_senha(SENHA), "ADMIN")
+    banco.criar_usuario("maria", "Maria Cuidadora", auth.hash_senha(SENHA), "CUIDADOR")
+    yield banco, app, relogio
+    servico.parar()
+
+
+def _entrar(app, usuario, senha=SENHA):
+    cliente = TestClient(app)
+    resposta = cliente.post("/api/login", json={"usuario": usuario, "senha": senha})
+    return cliente, resposta
+
+
+def test_sem_login_a_api_responde_401_mas_eu_informa(ambiente_login):
+    _, app, _ = ambiente_login
+    anonimo = TestClient(app)
+    assert anonimo.get("/api/status").status_code == 401
+    assert anonimo.get("/api/alertas").status_code == 401
+    assert anonimo.get("/api/video").status_code == 401
+    assert anonimo.get("/api/eu").json() == {"login_obrigatorio": True, "usuario": None}
+
+
+def test_login_cookie_httponly_sessao_e_logout(ambiente_login):
+    banco, app, _ = ambiente_login
+    cliente, resposta = _entrar(app, "maria")
+    assert resposta.status_code == 200 and resposta.json()["papel"] == "CUIDADOR"
+    cookie = resposta.headers["set-cookie"].lower()
+    assert "httponly" in cookie and "samesite=lax" in cookie
+    assert cliente.get("/api/status").status_code == 200
+    assert cliente.get("/api/eu").json()["usuario"]["usuario"] == "maria"
+
+    token = cliente.cookies.get("sentinela_sessao")
+    assert token not in str(banco._consultar("SELECT token_hash FROM sessao"))  # o banco guarda só o hash
+
+    assert cliente.post("/api/logout").status_code == 204
+    assert cliente.get("/api/status").status_code == 401
+
+
+def test_login_errado_nao_revela_se_o_usuario_existe(ambiente_login):
+    _, app, _ = ambiente_login
+    _, senha_errada = _entrar(app, "maria", "senha-errada-123")
+    _, sem_usuario = _entrar(app, "fantasma", "senha-errada-123")
+    assert senha_errada.status_code == sem_usuario.status_code == 401
+    assert senha_errada.json() == sem_usuario.json()
+
+
+def test_bloqueia_apos_erros_seguidos_e_libera_depois(ambiente_login):
+    _, app, relogio = ambiente_login
+    for _ in range(3):
+        assert _entrar(app, "maria", "errada-errada-1")[1].status_code == 401
+    _, bloqueado = _entrar(app, "maria")  # até a senha certa é recusada durante o bloqueio
+    assert bloqueado.status_code == 429 and "retry-after" in bloqueado.headers
+    relogio[0] = 61
+    assert _entrar(app, "maria")[1].status_code == 200
+
+
+def test_usuario_desativado_perde_a_sessao_e_nao_entra(ambiente_login):
+    banco, app, _ = ambiente_login
+    admin, _ = _entrar(app, "admin")
+    maria, _ = _entrar(app, "maria")
+    maria_id = banco.obter_usuario_para_login("maria")["id"]
+    assert admin.patch(f"/api/usuarios/{maria_id}", json={"ativo": False}).status_code == 200
+    assert maria.get("/api/status").status_code == 401
+    assert _entrar(app, "maria")[1].status_code == 401
+
+
+def test_cuidador_nao_altera_configuracao_nem_gerencia_usuarios(ambiente_login):
+    banco, app, _ = ambiente_login
+    maria, _ = _entrar(app, "maria")
+    assert maria.get("/api/configuracao").status_code == 200
+    assert maria.put("/api/configuracao", json={"sensibilidade": 0.5}).status_code == 403
+    assert maria.post("/api/contatos", json={"nome": "X", "telefone": "123"}).status_code == 403
+    assert maria.get("/api/usuarios").status_code == 403
+    assert maria.get("/api/push/aparelhos").status_code == 403
+
+    alerta = banco.registrar_alerta(1, 1, "queda", 0.9, None)
+    tratado = maria.patch(f"/api/alertas/{alerta['id']}", json={"status": "RESOLVIDO", "tratado_por": "Outro Nome"})
+    assert tratado.status_code == 200
+    assert tratado.json()["tratado_por"] == "Maria Cuidadora"  # vem da sessão, não do texto enviado
+
+    admin, _ = _entrar(app, "admin")
+    assert admin.put("/api/configuracao", json={"sensibilidade": 0.5}).status_code == 200
+    assert admin.get("/api/usuarios").status_code == 200
+    assert "senha_hash" not in admin.get("/api/usuarios").text
+
+
+def test_admin_cria_usuario_com_regras_de_senha(ambiente_login):
+    _, app, _ = ambiente_login
+    admin, _ = _entrar(app, "admin")
+    base = {"usuario": "joao", "nome": "João", "papel": "CUIDADOR"}
+    assert admin.post("/api/usuarios", json={**base, "senha": "curta"}).status_code == 422
+    assert admin.post("/api/usuarios", json={**base, "senha": SENHA}).status_code == 201
+    assert admin.post("/api/usuarios", json={**base, "senha": SENHA}).status_code == 409
+    assert admin.post("/api/usuarios", json={**base, "usuario": "Com Espaço", "senha": SENHA}).status_code == 422
+    assert _entrar(app, "joao")[1].status_code == 200
+    assert admin.patch("/api/usuarios/1", json={"ativo": False}).status_code == 400  # não se desativa sozinho
+
+
+def test_troca_de_senha_encerra_as_sessoes(ambiente_login):
+    banco, app, _ = ambiente_login
+    admin, _ = _entrar(app, "admin")
+    maria, _ = _entrar(app, "maria")
+    maria_id = banco.obter_usuario_para_login("maria")["id"]
+    assert admin.patch(f"/api/usuarios/{maria_id}", json={"senha": "outra-senha-longa-9"}).status_code == 200
+    assert maria.get("/api/status").status_code == 401
+    assert _entrar(app, "maria", "outra-senha-longa-9")[1].status_code == 200
+
+
+def test_origem_diferente_em_escrita_e_recusada(ambiente_login):
+    _, app, _ = ambiente_login
+    maria, _ = _entrar(app, "maria")
+    cabecalho = {"Origin": "https://site-malicioso.exemplo"}
+    assert maria.patch("/api/alertas/1", json={"status": "RESOLVIDO"}, headers=cabecalho).status_code == 403
+    assert maria.get("/api/status", headers=cabecalho).status_code == 200  # leitura não é afetada
+
+
+def test_websocket_exige_sessao(ambiente_login):
+    from starlette.websockets import WebSocketDisconnect
+
+    _, app, _ = ambiente_login
+    with pytest.raises(WebSocketDisconnect):
+        with TestClient(app).websocket_connect("/api/ws"):
+            pass
+    maria, _ = _entrar(app, "maria")
+    with maria.websocket_connect("/api/ws") as ws:
+        assert ws.receive_json()["tipo"] == "status"
+
+
+def test_sessao_expirada_nao_vale(ambiente_login):
+    banco, app, _ = ambiente_login
+    maria, _ = _entrar(app, "maria")
+    banco._executar("UPDATE sessao SET expira_em = ?", ("2000-01-01T00:00:00",))
+    assert maria.get("/api/status").status_code == 401
+
+
+def test_cli_cria_usuario_pedindo_a_senha_no_terminal(tmp_path, monkeypatch, capsys):
+    from sentinela_api import usuarios
+
+    banco = Banco(str(tmp_path / "cli.db"), usar_postgres=False)
+    respostas = iter(["curta", "uma-senha-bem-longa-1", "uma-senha-bem-longa-1"])
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": next(respostas))
+    assert usuarios.main(["criar", "--usuario", "ana", "--nome", "Ana", "--papel", "ADMIN"], banco) == 0
+    assert "pelo menos" in capsys.readouterr().out  # a 1ª senha, curta demais, foi recusada
+    assert banco.obter_usuario_para_login("ana")["papel"] == "ADMIN"
+    assert usuarios.main(["criar", "--usuario", "ana"], banco) == 1  # duplicado
+    assert usuarios.main(["desativar", "--usuario", "ana"], banco) == 0
+    assert banco.obter_usuario_para_login("ana")["ativo"] is False
+
+
+def test_hash_de_senha():
+    from sentinela_api import autenticacao as auth
+
+    h = auth.hash_senha(SENHA)
+    assert SENHA not in h and h.startswith("scrypt$")
+    assert auth.hash_senha(SENHA) != h  # sal aleatório
+    assert auth.verificar_senha(SENHA, h) and not auth.verificar_senha("outra", h)
+    assert not auth.verificar_senha(SENHA, "lixo") and not auth.verificar_senha(SENHA, "scrypt$a$b$c$d$e")

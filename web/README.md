@@ -40,6 +40,6 @@ então use só em rede interna confiável.
   servidor (PostgreSQL ou SQLite — ver README da raiz).
 
 ## Pendências para a próxima etapa (documentação)
-- Login JWT e perfis Cuidador/Gestor (RF12).
+- ~~Login e perfis (RF12)~~ feito: tela de login, papéis Cuidador/Administrador e gestão de usuários (cookie de sessão, sem JWT).
 - Web Push com o app fechado (VAPID, `/push/assinaturas`).
 - Cache offline em IndexedDB (hoje: localStorage com os últimos 30 alertas).

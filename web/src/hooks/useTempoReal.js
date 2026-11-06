@@ -41,6 +41,15 @@ export function useTempoReal(aoReceberAlerta) {
         if (encerrado) return;
         const espera = Math.min(1000 * 2 ** tentativa, 15000);
         tentativa += 1;
+        // Sem conseguir reconectar: pode ser a sessão que expirou. Se o servidor exige login, volta para a tela de entrada.
+        if (tentativa === 2) {
+          api
+            .eu()
+            .then((r) => {
+              if (r.login_obrigatorio && !r.usuario) window.dispatchEvent(new Event("sentinela:sessao-expirada"));
+            })
+            .catch(() => {});
+        }
         temporizador = setTimeout(conectar, espera);
       };
     }
