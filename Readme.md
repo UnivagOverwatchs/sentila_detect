@@ -1,22 +1,260 @@
 # SENTINELA - Detecção de Quedas com Visão Computacional
 
-> **Projeto Integrador** - Sistema inteligente de monitoramento de segurança para detecção automática de quedas de pessoas idosas usando YOLO v8 e análise com IA.
+> **Projeto Integrador** - Monitoramento de quedas de pessoas idosas em Instituições de Longa Permanência (ILPI), usando as câmeras já existentes, estimativa de pose em CPU e uma PWA para os cuidadores.
 
 ---
 
 ## Criadores
 
 - **Hianny Urt**
-- **Thalia Limeira** 
-- **Igor Alves** 
-- **Cleverson Felipe** 
+- **Thalia Limeira**
+- **Igor Alves**
+- **Cleverson Felipe**
 
-**Instituição:** Univag  
+**Instituição:** Univag
 **Data:** 2026
 
 ---
 
-## Objetivo do Projeto
+## Visão geral
+
+```
+Webcam / câmera IP (RTSP)
+        │
+        ▼
+Serviço de Visão (Python)          sentinela_pose/  +  sentinela_api/servico_visao.py
+  1. MediaPipe Pose  → 33 pontos do corpo por pessoa (CPU, sem PyTorch)
+  2. Rastreador      → ID por pessoa
+  3. Lógica de queda → ângulo do tronco + descida do quadril + tempo no chão
+        │ grava evento/alerta + foto do momento
+        ▼
+Banco de dados                      PostgreSQL (servidor) ou SQLite (local)
+        ▲
+        │ REST + WebSocket + quadros JPEG
+API FastAPI                         sentinela_api/app.py
+        ▲
+        │
+PWA React (cuidador)                web/  → Painel, Histórico, Configurações, alerta em tela cheia
+```
+
+Por que pose em vez do YOLO treinado (abordagem anterior, no fim deste arquivo):
+- **Mais leve:** MediaPipe Pose *lite* (~3 MB) roda em tempo real na CPU; não precisa de PyTorch/CUDA.
+- **Mais confiável:** modelo pré-treinado pelo Google, em vez de 690 imagens validadas no próprio treino.
+- **Menos afetado pela perspectiva:** decide pelo ângulo do tronco e pela descida do quadril, não pela proporção da caixa.
+
+---
+
+## Como a queda é identificada
+
+| Situação | Como reconhece | Alerta |
+|---|---|---|
+| **Queda brusca** | quadril desce rápido (≥ 1,2 tronco/s) e a pessoa fica deitada | `queda` após **2 s** deitada |
+| **Queda lenta** | quadril desce aos poucos (≥ 0,7 tronco em até 5 s) e termina deitada | `queda` após **2 s** deitada |
+| **Pessoa no chão** | já aparece deitada (descida não foi vista) | `pessoa_no_chao` após **8 s** |
+| Sentar / agachar | tronco continua quase vertical | nenhum |
+| Levantou logo | ficou em pé por 1,5 s antes da confirmação | nenhum (volta ao normal) |
+
+"Deitada" = tronco (linha quadril → ombro) com mais de 60° em relação à vertical. Medidas em "comprimentos de tronco" valem perto ou longe da câmera.
+
+**Filtros contra falso alarme:**
+- pose descartada se ombros/quadril estiverem fora da imagem ou pouco visíveis (pessoa cortada pela borda, sentada perto da câmera);
+- quadril acima dos ombros (> 135°) é tratado como erro do modelo;
+- uma pessoa precisa ser vista por 1 s antes de poder gerar alerta;
+- o ângulo usado é a mediana dos últimos 0,3 s;
+- se a pose some, a contagem só continua quando a queda foi vista.
+
+Todos os limiares ficam em `sentinela_pose/config.py` e podem ser trocados pelo `.env`. Na interface, o controle **Sensibilidade** ajusta vários deles de uma vez.
+
+---
+
+## Estrutura do projeto
+
+```
+DetectHumans/
+├── servidor.py              # sobe tudo: serviço de visão + API + PWA (uso principal)
+├── main_pose.py             # modo simples: janela do OpenCV, sem interface web
+├── sentinela_pose/          # detecção (não depende da interface)
+│   ├── config.py            #   limiares ajustáveis
+│   ├── pontos.py            #   estrutura da pose (33 pontos)
+│   ├── pose_estimator.py    #   MediaPipe Pose Landmarker
+│   ├── fall_detector.py     #   rastreador + máquina de estados da queda
+│   └── alertas.py           #   foto do alerta + WhatsApp
+├── sentinela_api/           # backend da PWA
+│   ├── banco.py             #   PostgreSQL ou SQLite (mesmo esquema da documentação)
+│   ├── servico_visao.py     #   detecção em thread + quadro atual + status
+│   ├── sensibilidade.py     #   controle 0–100% → limiares
+│   └── app.py               #   rotas REST, WebSocket e arquivos da PWA
+├── web/                     # PWA em React (Vite)
+├── tests/                   # testes automáticos (pytest)
+├── requirements_pose.txt    # dependências Python desta versão
+├── .env.exemplo_pose        # modelo de configuração
+└── (arquivos da abordagem anterior: alerta_zap*.py, dataset*/, runs/, yolov8n.pt ...)
+```
+
+---
+
+## Instalação
+
+Requisitos: **Python 3.12**, **Node.js 18+** e uma webcam ou câmera IP.
+
+```powershell
+# 1. Ambiente Python
+python -m venv .venv
+.\.venv\Scripts\activate            # Linux/Mac: source .venv/bin/activate
+pip install -r requirements_pose.txt
+
+# 2. Interface (compilar uma vez; o servidor passa a entregá-la)
+cd web
+npm install
+npm run build
+cd ..
+```
+
+Na primeira execução o modelo de pose é baixado para `modelos/`.
+
+> Se o `pip` instalou `opencv-python` e `opencv-contrib-python` juntos, remova os dois e reinstale só o do requirements: `pip uninstall -y opencv-python opencv-contrib-python && pip install -r requirements_pose.txt`.
+
+---
+
+## Como executar
+
+```powershell
+python servidor.py                                   # webcam 0 → http://localhost:8000
+python servidor.py --fonte 1 --camera "Quarto" --local "1º andar"
+python servidor.py --fonte rtsp://usuario:senha@ip:554/stream
+python servidor.py --host 0.0.0.0                    # acessar pelo celular na mesma rede
+```
+
+- **Ctrl+C** encerra (libera a câmera; se o navegador segurar conexões, força a saída em 5 s; 2º Ctrl+C sai na hora).
+- Para descobrir o número da webcam USB: rode com `--fonte 0`, `1`, `2`... ou use `listar_cameras.py`.
+
+Modo simples, sem interface web (útil para calibrar):
+
+```powershell
+python main_pose.py --fonte 1                # janela do OpenCV com esqueleto e estado; 'q' sai
+python main_pose.py --fonte video_queda.mp4  # testar com vídeo gravado
+```
+
+### Telas da PWA
+
+| Tela | O que tem |
+|---|---|
+| **Painel** | vídeo ao vivo com esqueleto/estado, câmeras ativas, alertas pendentes, sensibilidade, pessoas em cena, alertas recentes |
+| **Histórico** | filtro por tipo, foto do momento, *Resolver* / *Falso alarme* (registra quem tratou e quando) |
+| **Configurações** | sensibilidade, liga/desliga câmeras, contatos de emergência, nome do cuidador, notificações |
+| **Alerta em tela cheia** | sirene, vibração e notificação; *Ligar para…*, *Ver câmera ao vivo*, *Resolver*, *Falso alarme* |
+
+No celular a navegação vai para a barra inferior e o app pode ser instalado na tela inicial.
+
+---
+
+## Configuração (`.env`)
+
+Copie `.env.exemplo_pose` para `.env` (o `.env` não vai para o git). Tudo é opcional.
+
+```env
+# Câmera padrão do servidor.py
+CAMERA_FONTE=1
+CAMERA_NOME=Quarto
+CAMERA_LOCAL=1º andar
+
+# Banco PostgreSQL (sem isto, usa o arquivo local sentinela.db)
+DATABASE_URL=postgresql://usuario:senha@servidor:5432/nome_do_banco
+# ou: PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD / PGSSLMODE
+
+# WhatsApp (API local já usada pelo projeto)
+WHATSAPP_URL=http://localhost:3000/client/sendMessage/ABCD
+WHATSAPP_CHAT_ID=55DDDNUMERO@c.us
+ALERTA_COOLDOWN=30
+
+# Modelo de pose: lite (rápido) | full | heavy (preciso)
+POSE_MODELO=lite
+
+# Limiares (exemplos; lista completa em sentinela_pose/config.py)
+QUEDA_ANGULO_DEITADO=60
+QUEDA_VELOCIDADE=1.2
+QUEDA_DESNIVEL_LENTA=0.7
+QUEDA_TEMPO_CONFIRMA=2
+QUEDA_TEMPO_NO_CHAO=8
+```
+
+---
+
+## Banco de dados
+
+O servidor mostra ao iniciar qual banco está em uso (`PostgreSQL (servidor/banco)` ou `SQLite (sentinela.db)`) e cria as tabelas que faltarem, sem alterar as existentes. Tabelas, seguindo o modelo lógico da documentação:
+
+| Tabela | Conteúdo |
+|---|---|
+| `camera` | nome, local, fonte, ativa |
+| `evento` | câmera, ID da pessoa, tipo (`QUEDA` / `MOVIMENTO_ANOMALO`), confiança, data/hora, caminho da foto |
+| `alerta` | status (`PENDENTE` / `RESOLVIDO` / `FALSO_ALARME`), quem tratou, quando |
+| `contato_emergencia` | nome, telefone, tipo |
+| `configuracao` | sensibilidade |
+
+LGPD: nenhum vídeo é gravado; só a foto do momento do alerta (pasta `alertas_queda/`).
+
+---
+
+## API
+
+| Método | Rota | Função |
+|---|---|---|
+| GET | `/api/status` | estado geral, FPS, pessoas, pendentes |
+| GET | `/api/quadro` | quadro atual da câmera (JPEG) |
+| GET | `/api/video` | vídeo MJPEG contínuo (para VLC e afins) |
+| GET | `/api/alertas?status=&tipo=&limite=` | lista de alertas |
+| PATCH | `/api/alertas/{id}` | resolver / falso alarme |
+| GET | `/api/alertas/{id}/imagem` | foto do momento |
+| GET / PUT | `/api/cameras`, `/api/cameras/{id}` | listar, ligar/desligar |
+| GET / PUT | `/api/configuracao` | sensibilidade |
+| GET / POST / DELETE | `/api/contatos`, `/api/contatos/{id}` | contatos de emergência |
+| WS | `/api/ws` | status a cada 1 s + alertas novos na hora |
+
+Documentação interativa: `http://localhost:8000/docs`.
+
+---
+
+## Testes
+
+```powershell
+python -m pytest -v
+```
+
+31 testes, sem câmera nem MediaPipe (poses sintéticas e captura simulada):
+- lógica de queda: brusca, lenta, deitado sem descida, sentar, levantar, perda da pose, duas pessoas, falsos alarmes reais (quadril fora da imagem, tronco invertido, IDs que piscam);
+- API: alerta gerado pela queda simulada, tratar alerta, filtros, sensibilidade, câmeras, contatos, WebSocket, quadro JPEG.
+
+Os testes sempre usam um SQLite temporário, nunca o banco do servidor.
+
+---
+
+## Calibração e limitações
+
+- **Posição da câmera:** no alto do canto do quarto (2–2,5 m), em diagonal. Câmera na altura da mesa ou olhando de cima reduz a precisão do ângulo.
+- **Corpo inteiro:** ombros e quadril precisam aparecer; pessoa cortada pela borda é ignorada de propósito.
+- **Cama x chão:** a câmera não diferencia; deitar na cama devagar pode gerar alerta de queda. Próximo passo: marcar a área da cama na imagem.
+- **Sem login ainda:** use `--host 0.0.0.0` só em rede interna confiável.
+- **Notificação com o app fechado** depende de Web Push (próxima etapa).
+- **Uma câmera por servidor** nesta versão.
+
+## Próximas etapas
+
+- [ ] Login JWT e perfis Cuidador/Gestor
+- [ ] Web Push (alerta com o app fechado)
+- [ ] Várias câmeras no mesmo servidor
+- [ ] Área da cama (zona onde deitar é normal)
+- [ ] Residentes vinculados às câmeras/eventos
+- [ ] Implantação na ILPI parceira e calibração com a equipe
+
+---
+
+## Abordagem anterior (YOLOv8) — README original
+
+<details>
+<summary>Clique para ver a documentação da primeira versão (YOLOv8 + OpenAI + CustomTkinter)</summary>
+
+### Objetivo do Projeto
 
 Desenvolver um sistema automático de **detecção de quedas em tempo real** que:
 
@@ -34,7 +272,7 @@ Desenvolver um sistema automático de **detecção de quedas em tempo real** que
 
 ---
 
-## Dataset
+### Dataset
 
 O dataset foi anotado usando **CVAT (Computer Vision Annotation Tool)** com:
 
@@ -56,9 +294,9 @@ dataset2/
 
 ---
 
-## Como Funciona o Sistema
+### Como Funciona o Sistema
 
-### 1. **Captura e Processamento de Frames**
+#### 1. **Captura e Processamento de Frames**
 ```python
 # Thread dedicada para captura otimizada
 - Captura frames da webcam em tempo real (640x360)
@@ -66,7 +304,7 @@ dataset2/
 - Sincroniza com thread de inferência
 ```
 
-### 2. **Detecção com YOLO v8 Segmentation**
+#### 2. **Detecção com YOLO v8 Segmentation**
 ```python
 model = YOLO("runs/segment/train3/weights/best.pt")
 resultado = model.predict(
@@ -84,7 +322,7 @@ resultado = model.predict(
 - **Risco de Queda:** altura/largura da caixa < 1.40
 - **Limiar ativação:** 2 frames consecutivos em risco
 
-### 3. **Validação com OpenAI GPT-4**
+#### 3. **Validação com OpenAI GPT-4**
 Quando uma queda é suspeita:
 
 ```python
@@ -112,7 +350,7 @@ def confirmar_risco_com_openai(frames_base64):
   "categoria": "queda"
 }
 ```
-### 4. **Envio de alertas por Whatsapp**
+#### 4. **Envio de alertas por Whatsapp**
 O sistema envia alertas de queda com uma imagem capturada do momento do evento diretamente para um contato configurado no WhatsApp. Isso é feito de forma assíncrona para não impactar o desempenho do monitoramento em tempo real e respeita um período de cooldown para evitar spam.
 
 ```python
@@ -137,7 +375,7 @@ Detalhes da Integração:
 - **Cooldown:** Um WHATSAPP_COOLDOWN de 10 segundos é aplicado para evitar múltiplos alertas em um curto período.
 
 
-### 5. **Interface Gráfica em Tempo Real**
+#### 5. **Interface Gráfica em Tempo Real**
 Interface moderna com **CustomTkinter** mostrando:
 
 -  Vídeo ao vivo com anotações
@@ -148,9 +386,9 @@ Interface moderna com **CustomTkinter** mostrando:
 
 ---
 
-##  Processo de Treinamento do YOLO
+###  Processo de Treinamento do YOLO
 
-### Configuração
+#### Configuração
 
 O arquivo [train.py](train.py) realiza o treinamento supervisionado:
 
@@ -169,7 +407,7 @@ model.train(
 )
 ```
 
-### Arquivo de Configuração (data.yaml)
+#### Arquivo de Configuração (data.yaml)
 
 ```yaml
 path: /path/to/dataset2
@@ -180,7 +418,7 @@ nc: 2  # 2 classes
 names: ['pessoa_caida', 'pessoa_em_pe']
 ```
 
-### Métricas de Treinamento
+#### Métricas de Treinamento
 
 Após treinamento com 926 imagens, esperamos:
 
@@ -193,7 +431,7 @@ Após treinamento com 926 imagens, esperamos:
 | **FPS (CPU)** | ~25-30 |
 | **FPS (GPU)** | ~100+ |
 
-### Exemplo de Curva de Treinamento
+#### Exemplo de Curva de Treinamento
 
 ```
 Epoch 1/100:   Loss: 2.45  | mAP50: 0.12
@@ -212,7 +450,7 @@ runs/segment/train3/weights/
 
 ---
 
-##  Estrutura do Projeto
+###  Estrutura do Projeto
 
 ```
 DetectHumans/
@@ -246,9 +484,9 @@ DetectHumans/
 
 ---
 
-##  Como Executar
+###  Como Executar
 
-### 1. Instalação de Dependências
+#### 1. Instalação de Dependências
 
 ```bash
 # Criar ambiente virtual (recomendado)
@@ -264,7 +502,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Treinar o Modelo (Caso for fazer do zero)
+#### 2. Treinar o Modelo (Caso for fazer do zero)
 
 ```bash
 python train.py
@@ -272,7 +510,7 @@ python train.py
 
 O treinamento levará entre 1 a 2 dias para treinar e salvará os pesos em `runs/segment/train3/weights/best.pt`.
 
-### 3. Executar o Sistema de Detecção
+#### 3. Executar o Sistema de Detecção
 
 ```bash
 python alerta_zap.py
@@ -290,7 +528,7 @@ python alerta_zap.py
 
 ---
 
-## 🔧 Configurações Importantes
+### 🔧 Configurações Importantes
 
 Arquivo `alerta_zap.py` - Constantes ajustáveis:
 
@@ -314,7 +552,7 @@ OPENAI_MODEL = "gpt-4o-mini"
 TEMPO_COOLDOWN_AI = 4.0         # Segundos entre requisições
 ```
 
-### Variáveis de Ambiente (.env)
+#### Variáveis de Ambiente (.env)
 
 ```
 DEVICE=0                        # 0=GPU, cpu=CPU
@@ -326,9 +564,9 @@ OPENAI_MODEL=gpt-4o-mini       # Modelo a usar
 
 ---
 
-##  Exemplos de Funcionamento
+###  Exemplos de Funcionamento
 
-### Exemplo 1: Detecção em Tempo Real
+#### Exemplo 1: Detecção em Tempo Real
 
 ```
 Frame 1: Pessoa em pé → Postura: "em_pe" → Status: ✅ Normal
@@ -342,7 +580,7 @@ Resposta: {"risco": 95, "queda": true, "categoria": "queda"}
 🚨 EMERGÊNCIA DETECTADA - ALERTA ENVIADO
 ```
 
-### Exemplo 2: Métrica de Treinamento (CSV dos Resultados)
+#### Exemplo 2: Métrica de Treinamento (CSV dos Resultados)
 
 ```
 epoch  box_loss  cls_loss  seg_loss  mAP50  mAP50-95  FPS
@@ -352,7 +590,7 @@ epoch  box_loss  cls_loss  seg_loss  mAP50  mAP50-95  FPS
 100    0.087    0.034    0.067    0.901  0.824    25
 ```
 
-### Exemplo 3: Saída do Modelo na GUI
+#### Exemplo 3: Saída do Modelo na GUI
 
 ```
 ┌─────────────────────────────┐
@@ -370,7 +608,7 @@ epoch  box_loss  cls_loss  seg_loss  mAP50  mAP50-95  FPS
 
 ---
 
-## Troubleshooting
+### Troubleshooting
 
 | Problema | Solução |
 |----------|---------|
@@ -382,7 +620,7 @@ epoch  box_loss  cls_loss  seg_loss  mAP50  mAP50-95  FPS
 
 ---
 
-## Dependências
+### Dependências
 
 Veja `requirements.txt`:
 
@@ -401,7 +639,7 @@ requests==2.31.0
 
 ---
 
-## Referências
+### Referências
 
 - **YOLO v8 Docs:** https://docs.ultralytics.com/
 - **OpenAI API:** https://platform.openai.com/docs/
@@ -410,16 +648,18 @@ requests==2.31.0
 
 ---
 
-##  Licença
+###  Licença
 
 Este projeto é desenvolvido para fins de aprendizado como parte de projeto integrador, caso a ideia seja reultilizda para outros meios o projeto original deve ser refenciada.
 
-## Proximas Etapas
+### Proximas Etapas
 
 - aumentar e balancear o dataset;
 - melhorar robustez em diferentes ambientes (iluminacao, angulos, oclusao);
 - criar logica temporal para diferenciar postura normal de queda;
 - integrar alertas para cenarios reais de monitoramento de idosos.
 
-## Observacoes
+### Observacoes
 Este repositorio representa uma etapa importante de base tecnica. O foco futuro e transformar a deteccao de pessoas em uma solucao pratica para **prevencao e resposta a acidentes**, especialmente no contexto de cuidado com idosos.
+
+</details>

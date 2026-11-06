@@ -10,17 +10,30 @@
 ## Como funciona
 1. `pose_estimator.py`: 33 pontos do corpo por pessoa.
 2. `fall_detector.py`:
-   - **ângulo do tronco**: 0° em pé, 90° deitado;
-   - **velocidade de descida do quadril** normalizada pelo tamanho do tronco;
-   - **máquina de estados**: `NORMAL → CAINDO/NO_CHAO → ALERTA`, com tolerância a perdas curtas da pose.
+   - **ângulo do tronco**: 0° em pé, 90° deitado (mediana dos últimos 0,3 s);
+   - **descida do quadril** medida em "comprimentos de tronco" (vale perto ou longe da câmera):
+     - *brusca*: velocidade ≥ `QUEDA_VELOCIDADE` (1,2 tronco/s);
+     - *lenta*: desceu ≥ `QUEDA_DESNIVEL_LENTA` (0,7 tronco) dentro de `QUEDA_JANELA_LENTA` (5 s);
+   - **máquina de estados** por pessoa:
+
+     | Estado | Quando |
+     |---|---|
+     | `NORMAL` | em pé, sentado, andando |
+     | `CAINDO` | deitado depois de descida vista (brusca ou lenta) → alerta `queda` em 2 s |
+     | `NO_CHAO` | deitado sem descida vista → alerta `pessoa_no_chao` em 8 s |
+     | `ALERTA` | alerta disparado (uma vez por episódio); volta a `NORMAL` após 1,5 s em pé |
+
+   - **filtros contra falso alarme**: ombros/quadril fora da imagem ou pouco visíveis, tronco invertido
+     (> 135°), pessoa muito pequena, ID visto há menos de 1 s; sem pose, só continua contando se a queda foi vista.
 3. `alertas.py`: salva imagem em `alertas_queda/` e envia WhatsApp (mesma API local já usada).
 
 ## Rodar
 ```bash
 pip install -r requirements_pose.txt
-python main_pose.py                    # webcam
+python servidor.py                     # com interface web (ver README da raiz)
+python main_pose.py                    # modo simples: janela do OpenCV
 python main_pose.py --fonte video.mp4  # testar com vídeo de queda
-python -m pytest -v                    # testes da lógica (sem câmera)
+python -m pytest -v                    # testes (sem câmera)
 ```
 Na 1ª execução o modelo é baixado para `modelos/`.
 
@@ -30,5 +43,7 @@ Ajuste os limiares no `.env` (ver `.env.exemplo_pose`). Use vídeos públicos de
 
 ## Limitações
 - Câmera muito alta (vista de cima) reduz a variação de ângulo: prefira câmeras a 2–2,5 m em diagonal.
-- Corpo deitado e parcialmente oculto (cama, cadeira) pode perder a pose; a máquina de estados mantém a contagem por até `QUEDA_TEMPO_PERDA_MAX`.
+- Ombros e quadril precisam aparecer: pessoa cortada pela borda é ignorada de propósito.
+- Cama x chão: deitar na cama devagar pode ser lido como queda lenta (próximo passo: área da cama).
+- Corpo deitado e parcialmente oculto pode perder a pose; após uma queda vista, a contagem continua por até `QUEDA_TEMPO_PERDA_MAX`.
 - Muitas pessoas cruzando: o rastreador é simples (vizinho mais próximo).
