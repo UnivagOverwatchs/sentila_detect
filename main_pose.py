@@ -21,6 +21,7 @@ Tecla 'q' encerra.
 """
 
 import argparse
+import faulthandler
 import platform
 import threading
 import time
@@ -28,6 +29,7 @@ import time
 import cv2
 from dotenv import load_dotenv
 
+faulthandler.enable()  # se o processo morrer em código nativo (C++), imprime onde foi
 load_dotenv()  # carrega .env antes de criar as configs (elas leem variáveis de ambiente)
 
 from sentinela_pose.alertas import NotificadorAlertas  # noqa: E402
@@ -58,6 +60,9 @@ class CapturaVideo:
             self.cap = cv2.VideoCapture(int(fonte), backend)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, LARGURA)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ALTURA)
+            # Força o formato MJPG (igual ao alerta_zap_ajuste_frames.py). Sem isso, pelo DirectShow
+            # algumas webcams entregam YUY2 convertido errado -> imagem quase sem cor.
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         else:
             self.cap = cv2.VideoCapture(fonte)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -154,7 +159,15 @@ def main():
             if not args.sem_janela:
                 cv2.imshow("Sentinela - Pose", tela)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
+                    print("[Sentinela] Encerrado pela tecla 'q'.")
                     break
+        else:
+            print("[Sentinela] A captura de vídeo parou (fim do vídeo ou câmera desconectada).")
+    except Exception:
+        # Mostra o erro completo em vez de a janela simplesmente fechar.
+        import traceback
+        traceback.print_exc()
+        input("Erro acima. Pressione Enter para sair...")
     finally:
         captura.fechar()
         estimador.fechar()

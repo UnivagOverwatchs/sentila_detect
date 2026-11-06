@@ -1,6 +1,8 @@
 # Dependências da detecção por pose (main_pose.py). Sem PyTorch/CUDA.
 mediapipe>=0.10.14
-opencv-python>=4.9
+# Só UM pacote OpenCV: o mediapipe já exige o "contrib". Ter opencv-python junto faz os dois
+# sobrescreverem a mesma pasta cv2. Fixado < 5 porque o OpenCV 5 ainda é recente/instável no Windows.
+opencv-contrib-python>=4.9,<5
 numpy>=1.26
 requests>=2.31
 python-dotenv>=1.0
