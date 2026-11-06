@@ -3,7 +3,7 @@ servidor.py - Sobe o Sentinela completo: serviço de visão + API + PWA.
 
 LÓGICA GERAL
 ------------
-1. Abre o banco SQLite (cria as tabelas na 1ª vez) e cadastra a câmera da --fonte.
+1. Conecta ao PostgreSQL (tabelas só com --criar-tabelas) e cadastra a câmera da --fonte.
 2. Inicia o ServicoVisao em uma thread (pose + lógica de queda + gravação de alertas).
 3. Sobe a API FastAPI com uvicorn, que também entrega a PWA já compilada (web/dist).
 
@@ -27,6 +27,7 @@ load_dotenv()
 
 from sentinela_api.app import criar_app  # noqa: E402
 from sentinela_api.banco import Banco  # noqa: E402
+from sentinela_api.push import ServicoPush  # noqa: E402
 from sentinela_api.servico_visao import ServicoVisao  # noqa: E402
 
 PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
@@ -39,12 +40,21 @@ def main() -> None:
     parser.add_argument("--local", default=os.getenv("CAMERA_LOCAL", "Térreo"), help="local da câmera")
     parser.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 para acessar pelo celular na rede")
     parser.add_argument("--porta", type=int, default=8000)
-    parser.add_argument("--banco", default="sentinela.db")
+    parser.add_argument("--criar-tabelas", action="store_true", help="cria as tabelas no PostgreSQL e encerra (só quando pedido)")
     args = parser.parse_args()
 
-    banco = Banco(args.banco)
+    banco = Banco()  # PostgreSQL, conforme POSTGRES_* do .env
+    if args.criar_tabelas:
+        banco.criar_tabelas()
+        print("[Sentinela] Tabelas criadas.")
+        banco.fechar()
+        return
     camera = banco.garantir_camera(args.camera, args.local, args.fonte)
-    servico = ServicoVisao(banco, camera, args.fonte)
+    push = ServicoPush(banco)
+    if not push.configurado:
+        print("[Sentinela] Push desativado: defina VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env "
+              "(python -m sentinela_api.push --gerar-chaves).")
+    servico = ServicoVisao(banco, camera, args.fonte, servico_push=push)
     servico.iniciar()
 
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):
@@ -52,9 +62,10 @@ def main() -> None:
 
     print(f"[Sentinela] Abra http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.porta}")
     try:
-        uvicorn.run(criar_app(banco, servico, PASTA_WEB), host=args.host, port=args.porta, log_level="warning")
+        uvicorn.run(criar_app(banco, servico, PASTA_WEB, push), host=args.host, port=args.porta, log_level="warning")
     finally:
         servico.parar()
+        banco.fechar()
 
 
 if __name__ == "__main__":

@@ -62,8 +62,10 @@ class ServicoVisao:
                  criar_captura: Callable = _criar_captura_padrao,
                  criar_estimador: Callable = _criar_estimador_padrao,
                  desenhar: Callable = _desenhar_padrao,
-                 notificador: Optional[NotificadorAlertas] = None):
+                 notificador: Optional[NotificadorAlertas] = None,
+                 servico_push=None):
         self.banco = banco
+        self.servico_push = servico_push  # sentinela_api.push.ServicoPush (opcional)
         self.camera = camera
         self.fonte = fonte
         self.cfg_queda = cfg_queda or ConfigQueda()
@@ -159,7 +161,9 @@ class ServicoVisao:
                 for evento in alertas:
                     caminho = self.notificador.notificar(evento, tela)
                     confianca = min(evento.angulo_tronco / 90.0, 1.0)  # proxy simples: quão horizontal está o tronco
-                    self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho)
+                    alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho)
+                    if self.servico_push is not None:
+                        self.servico_push.avisar(alerta)  # push para os celulares, mesmo com o app fechado
 
                 estados = {p.estado for p in pessoas}
                 estado_geral = ("alerta" if Estado.ALERTA in estados

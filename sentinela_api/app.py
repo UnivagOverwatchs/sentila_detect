@@ -14,6 +14,9 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/contatos            contatos de emergência
     POST   /api/contatos
     DELETE /api/contatos/{id}
+    GET    /api/push/chave          chave pública VAPID (a PWA usa para assinar)
+    POST   /api/push/assinaturas    registra o aparelho para receber push
+    DELETE /api/push/assinaturas    cancela
     WS     /api/ws                  tempo real: status a cada 1 s + alertas novos na hora
 
 Ainda sem login/JWT (previsto na API Node.js). Por isso o servidor escuta só em
@@ -53,13 +56,27 @@ class Configuracao(BaseModel):
     sensibilidade: float = Field(ge=0.0, le=1.0)
 
 
+class ChavesPush(BaseModel):
+    p256dh: str = Field(min_length=1, max_length=255)
+    auth: str = Field(min_length=1, max_length=255)
+
+
+class AssinaturaPush(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000, pattern=r"^https://")
+    keys: ChavesPush
+
+
+class RemoverAssinatura(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+
+
 class NovoContato(BaseModel):
     nome: str = Field(min_length=1, max_length=120)
     telefone: str = Field(min_length=3, max_length=20, pattern=r"^[0-9+()\-\s]+$")
     tipo: str = Field(default="Familiar", max_length=30)
 
 
-def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None) -> FastAPI:
+def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None, push=None) -> FastAPI:
     """Fábrica da aplicação: recebe as dependências prontas (facilita os testes)."""
     app = FastAPI(title="Sentinela API", version="0.1.0")
 
@@ -153,6 +170,21 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         banco.remover_contato(contato_id)
 
     # ------------------------------------------------------------ tempo real
+    # ---- Web Push (aviso com o app fechado)
+    @app.get("/api/push/chave")
+    def chave_push():
+        if push is None or not push.configurado:
+            raise HTTPException(503, "Push não configurado no servidor")
+        return {"chave": push.chave_publica}
+
+    @app.post("/api/push/assinaturas", status_code=204)
+    def assinar_push(dados: AssinaturaPush):
+        banco.salvar_assinatura(dados.endpoint, dados.keys.p256dh, dados.keys.auth)
+
+    @app.delete("/api/push/assinaturas", status_code=204)
+    def cancelar_push(dados: RemoverAssinatura):
+        banco.remover_assinatura(dados.endpoint)
+
     @app.websocket("/api/ws")
     async def tempo_real(ws: WebSocket):
         await ws.accept()

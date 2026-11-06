@@ -35,6 +35,7 @@ export default defineConfig({
         navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/api/],
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
+        importScripts: ["push-sw.js"], // recebe o Web Push com o app fechado
       },
     }),
   ],

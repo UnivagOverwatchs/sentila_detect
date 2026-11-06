@@ -216,8 +216,12 @@ runs/segment/train3/weights/
 
 ```
 DetectHumans/
-├── alerta.py                    #  Script sem api whatsapp
-├── alerta_zap.py                #  Script de monitoramento principal S2
+├── servidor.py                  #  Servidor atual: visão por pose + API + PWA (PostgreSQL)
+├── main_pose.py                 #  Detecção por pose (MediaPipe) direto na tela
+├── sentinela_api/               #  API FastAPI, banco PostgreSQL e Web Push
+├── sentinela_pose/              #  Detector de queda por pose e alertas
+├── web/                         #  Interface PWA (React)
+├── docker-compose.yml           #  PostgreSQL local para desenvolvimento
 ├── train.py                     #  Script de treinamento YOLO
 ├── listar_cameras.py            #  Utilitário para listar câmeras da maquina
 ├── teste_webcam.py              #  Teste de webcam
@@ -272,11 +276,20 @@ python train.py
 
 O treinamento levará entre 1 a 2 dias para treinar e salvará os pesos em `runs/segment/train3/weights/best.pt`.
 
-### 3. Executar o Sistema de Detecção
+### 3. Executar o Sistema de Detecção (Sentinela: pose + API + PWA)
 
 ```bash
-python alerta_zap.py
+pip install -r requirements_pose.txt
+cp .env.exemplo_pose .env          # ajuste POSTGRES_* e, se quiser, VAPID_* e WHATSAPP_*
+docker compose up -d               # PostgreSQL local (ou aponte POSTGRES_HOST para outro servidor)
+python servidor.py --criar-tabelas # cria as tabelas (só na 1ª vez)
+npm --prefix web install && npm --prefix web run build
+python servidor.py                 # abre http://localhost:8000
 ```
+
+- **Aviso com o app fechado (Web Push):** gere as chaves com `python -m sentinela_api.push --gerar-chaves`, cole no `.env` e ative em *Configurações → Ativar notificações*. O celular exige HTTPS.
+- **WhatsApp:** preencha `WHATSAPP_URL` e `WHATSAPP_CHAT_ID` no `.env`.
+- As instruções do fluxo antigo (YOLO + OpenAI, scripts `alerta*.py`) foram removidas do projeto; as seções abaixo sobre treino YOLO são histórico.
 
 **Ao iniciar:**
 1. Selecione a câmera desejada (0 = integrada, 1 = externa)
@@ -292,7 +305,7 @@ python alerta_zap.py
 
 ## 🔧 Configurações Importantes
 
-Arquivo `alerta_zap.py` - Constantes ajustáveis:
+Fluxo antigo (YOLO) — constantes que existiam no script `alerta_zap.py`, já removido (histórico). A configuração atual está no `.env.exemplo_pose`:
 
 ```python
 # Qualidade da câmera
