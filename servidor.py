@@ -39,10 +39,11 @@ def main() -> None:
     parser.add_argument("--local", default=os.getenv("CAMERA_LOCAL", "Térreo"), help="local da câmera")
     parser.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 para acessar pelo celular na rede")
     parser.add_argument("--porta", type=int, default=8000)
-    parser.add_argument("--banco", default="sentinela.db")
+    parser.add_argument("--banco", default="sentinela.db", help="arquivo SQLite (usado só sem Postgres no .env)")
     args = parser.parse_args()
 
-    banco = Banco(args.banco)
+    banco = Banco(args.banco)  # PostgreSQL se o .env tiver DATABASE_URL/PGHOST; senão SQLite local
+    print(f"[Sentinela] Banco de dados: {banco.descricao}")
     camera = banco.garantir_camera(args.camera, args.local, args.fonte)
     servico = ServicoVisao(banco, camera, args.fonte)
     servico.iniciar()

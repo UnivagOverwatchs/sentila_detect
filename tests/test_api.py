@@ -64,7 +64,7 @@ class EstimadorFalso:
 
 @pytest.fixture
 def ambiente(tmp_path):
-    banco = Banco(str(tmp_path / "teste.db"))
+    banco = Banco(str(tmp_path / "teste.db"), usar_postgres=False)  # testes nunca tocam o banco do servidor
     camera = banco.garantir_camera("Quarto teste", "Térreo", "fake")
     servico = ServicoVisao(banco, camera, "fake", cfg_queda=ConfigQueda(),
                            criar_captura=CapturaFalsa, criar_estimador=EstimadorFalso,
