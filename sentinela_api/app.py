@@ -1,0 +1,175 @@
+"""
+app.py - Rotas da API usadas pela PWA.
+
+Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
+    GET    /api/status              estado geral, FPS, pessoas, pendentes
+    GET    /api/video               vídeo ao vivo (MJPEG: funciona direto em <img src>)
+    GET    /api/alertas             lista com filtros ?status=&tipo=&limite=
+    PATCH  /api/alertas/{id}        resolver ou marcar falso alarme
+    GET    /api/alertas/{id}/imagem foto do momento do alerta
+    GET    /api/cameras             câmeras cadastradas
+    PUT    /api/cameras/{id}        ligar/desligar, renomear
+    GET    /api/configuracao        sensibilidade
+    PUT    /api/configuracao
+    GET    /api/contatos            contatos de emergência
+    POST   /api/contatos
+    DELETE /api/contatos/{id}
+    WS     /api/ws                  tempo real: status a cada 1 s + alertas novos na hora
+
+Ainda sem login/JWT (previsto na API Node.js). Por isso o servidor escuta só em
+127.0.0.1 por padrão; ver servidor.py --host.
+"""
+
+import asyncio
+import os
+from typing import Literal, Optional
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .banco import Banco
+from .sensibilidade import aplicar_sensibilidade, rotulo_sensibilidade
+from .servico_visao import ServicoVisao
+
+FPS_VIDEO = 15            # o navegador não precisa de 30 FPS; metade economiza CPU e rede
+INTERVALO_STATUS_S = 1.0  # frequência das atualizações pelo WebSocket
+
+
+# ---------------------------------------------------------------- modelos de entrada (validação automática)
+class TratarAlerta(BaseModel):
+    status: Literal["RESOLVIDO", "FALSO_ALARME"]
+    tratado_por: str = Field(default="Cuidador", max_length=120)
+
+
+class AtualizarCamera(BaseModel):
+    nome: Optional[str] = Field(default=None, max_length=80)
+    local: Optional[str] = Field(default=None, max_length=60)
+    ativa: Optional[bool] = None
+
+
+class Configuracao(BaseModel):
+    sensibilidade: float = Field(ge=0.0, le=1.0)
+
+
+class NovoContato(BaseModel):
+    nome: str = Field(min_length=1, max_length=120)
+    telefone: str = Field(min_length=3, max_length=20, pattern=r"^[0-9+()\-\s]+$")
+    tipo: str = Field(default="Familiar", max_length=30)
+
+
+def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None) -> FastAPI:
+    """Fábrica da aplicação: recebe as dependências prontas (facilita os testes)."""
+    app = FastAPI(title="Sentinela API", version="0.1.0")
+
+    # Aplica a sensibilidade salva ao detector já na inicialização.
+    aplicar_sensibilidade(servico.cfg_queda, banco.obter_sensibilidade())
+
+    def montar_status() -> dict:
+        cameras = banco.listar_cameras()
+        sensibilidade = banco.obter_sensibilidade()
+        return {
+            **servico.status(),
+            "pendentes": banco.contar_pendentes(),
+            "cameras_ativas": sum(1 for c in cameras if c["ativa"]),
+            "cameras_total": len(cameras),
+            "sensibilidade": sensibilidade,
+            "sensibilidade_rotulo": rotulo_sensibilidade(sensibilidade),
+        }
+
+    # ------------------------------------------------------------ status e vídeo
+    @app.get("/api/status")
+    def obter_status():
+        return montar_status()
+
+    @app.get("/api/video")
+    async def video(request: Request):
+        async def gerar():
+            # Formato multipart/x-mixed-replace: cada parte é um JPEG que substitui o anterior.
+            while not await request.is_disconnected():
+                quadro = servico.jpeg_atual()
+                yield b"--quadro\r\nContent-Type: image/jpeg\r\n\r\n" + quadro + b"\r\n"
+                await asyncio.sleep(1 / FPS_VIDEO)
+        return StreamingResponse(gerar(), media_type="multipart/x-mixed-replace; boundary=quadro",
+                                 headers={"Cache-Control": "no-store"})
+
+    # ------------------------------------------------------------ alertas
+    @app.get("/api/alertas")
+    def listar_alertas(status: Optional[str] = None, tipo: Optional[str] = None, limite: int = 100):
+        return banco.listar_alertas(status=status, tipo=tipo, limite=min(max(limite, 1), 500))
+
+    @app.patch("/api/alertas/{alerta_id}")
+    def tratar_alerta(alerta_id: int, dados: TratarAlerta):
+        if banco.obter_alerta(alerta_id) is None:
+            raise HTTPException(404, "Alerta não encontrado")
+        return banco.tratar_alerta(alerta_id, dados.status, dados.tratado_por)
+
+    @app.get("/api/alertas/{alerta_id}/imagem")
+    def imagem_alerta(alerta_id: int):
+        alerta = banco.obter_alerta(alerta_id)
+        # O caminho vem do banco (gravado pelo próprio serviço), nunca da URL: sem risco de path traversal.
+        if not alerta or not alerta["imagem"] or not os.path.exists(alerta["imagem"]):
+            raise HTTPException(404, "Imagem não disponível")
+        return FileResponse(alerta["imagem"], media_type="image/jpeg")
+
+    # ------------------------------------------------------------ câmeras
+    @app.get("/api/cameras")
+    def listar_cameras():
+        return banco.listar_cameras()
+
+    @app.put("/api/cameras/{camera_id}")
+    def atualizar_camera(camera_id: int, dados: AtualizarCamera):
+        camera = banco.atualizar_camera(camera_id, **dados.model_dump())
+        if camera is None:
+            raise HTTPException(404, "Câmera não encontrada")
+        if camera_id == servico.camera["id"]:
+            servico.ativa = camera["ativa"]  # efeito imediato no serviço de visão
+        return camera
+
+    # ------------------------------------------------------------ configuração
+    @app.get("/api/configuracao")
+    def obter_configuracao():
+        s = banco.obter_sensibilidade()
+        return {"sensibilidade": s, "rotulo": rotulo_sensibilidade(s)}
+
+    @app.put("/api/configuracao")
+    def salvar_configuracao(dados: Configuracao):
+        banco.salvar_sensibilidade(dados.sensibilidade)
+        aplicar_sensibilidade(servico.cfg_queda, dados.sensibilidade)
+        return {"sensibilidade": dados.sensibilidade, "rotulo": rotulo_sensibilidade(dados.sensibilidade)}
+
+    # ------------------------------------------------------------ contatos de emergência
+    @app.get("/api/contatos")
+    def listar_contatos():
+        return banco.listar_contatos()
+
+    @app.post("/api/contatos", status_code=201)
+    def criar_contato(dados: NovoContato):
+        return banco.criar_contato(dados.nome.strip(), dados.telefone.strip(), dados.tipo.strip())
+
+    @app.delete("/api/contatos/{contato_id}", status_code=204)
+    def remover_contato(contato_id: int):
+        banco.remover_contato(contato_id)
+
+    # ------------------------------------------------------------ tempo real
+    @app.websocket("/api/ws")
+    async def tempo_real(ws: WebSocket):
+        await ws.accept()
+        ultimo_id = banco.ultimo_alerta_id()  # só avisa alertas que surgirem após a conexão
+        try:
+            while True:
+                for alerta in reversed(banco.listar_alertas(depois_de_id=ultimo_id)):
+                    await ws.send_json({"tipo": "alerta", "alerta": alerta})
+                    ultimo_id = max(ultimo_id, alerta["id"])
+                await ws.send_json({"tipo": "status", "status": montar_status()})
+                await asyncio.sleep(INTERVALO_STATUS_S)
+        except (WebSocketDisconnect, RuntimeError):
+            pass  # navegador fechou a aba
+
+    # ------------------------------------------------------------ arquivos da PWA (build do React)
+    # Montado por último para não "engolir" as rotas /api.
+    if pasta_web and os.path.exists(os.path.join(pasta_web, "index.html")):
+        app.mount("/", StaticFiles(directory=pasta_web, html=True), name="pwa")
+
+    return app

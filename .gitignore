@@ -6,3 +6,8 @@ alertas_queda/
 # Modelos baixados pela detecção por pose
 modelos/
 .pytest_cache/
+
+# Interface e banco local do servidor
+web/node_modules/
+web/dist/
+sentinela.db

@@ -42,18 +42,19 @@ class NotificadorAlertas:
         self.chat_id = os.getenv("WHATSAPP_CHAT_ID")         # ex.: 5565XXXXXXXXX@c.us
         self._ultimo_envio = 0.0
 
-    def notificar(self, evento: EventoAlerta, quadro: Optional[np.ndarray]) -> None:
-        """Chamado pelo loop principal. Não bloqueia."""
+    def notificar(self, evento: EventoAlerta, quadro: Optional[np.ndarray]) -> Optional[str]:
+        """Chamado pelo loop principal. Não bloqueia. Devolve o caminho da foto salva (ou None)."""
         agora = time.time()
         caminho = self._salvar_imagem(evento, quadro)
         print(f"[ALERTA] {evento.tipo} | pessoa {evento.id_pessoa} | tronco {evento.angulo_tronco:.0f}° | {caminho}")
 
         if agora - self._ultimo_envio < self.cooldown_s:
-            return  # evita spam enquanto a mesma situação persiste
+            return caminho  # evita spam no WhatsApp enquanto a mesma situação persiste
         self._ultimo_envio = agora
 
         if self.url_whatsapp and self.chat_id:
             threading.Thread(target=self._enviar_whatsapp, args=(evento, quadro), daemon=True).start()
+        return caminho
 
     def _salvar_imagem(self, evento: EventoAlerta, quadro: Optional[np.ndarray]) -> Optional[str]:
         if quadro is None:
