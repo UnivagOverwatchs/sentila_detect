@@ -65,7 +65,17 @@ CREATE TABLE IF NOT EXISTS assinatura_push (
     endpoint   TEXT NOT NULL UNIQUE,
     p256dh     VARCHAR(255) NOT NULL,
     auth       VARCHAR(255) NOT NULL,
+    nome       VARCHAR(80),
     criada_em  TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS envio_push (
+    id             {pk},
+    assinatura_id  INTEGER,
+    alerta_id      INTEGER,
+    resultado      VARCHAR(10) NOT NULL,
+    codigo         INTEGER,
+    detalhe        VARCHAR(255),
+    enviado_em     TIMESTAMP NOT NULL
 );
 CREATE TABLE IF NOT EXISTS configuracao (
     id             INTEGER PRIMARY KEY CHECK (id = 1),
@@ -186,6 +196,15 @@ class Banco:
             self._executar(comando)
         self._executar("INSERT INTO configuracao (id, sensibilidade, atualizado_em) VALUES (1, 0.65, ?) "
                        "ON CONFLICT (id) DO NOTHING", (_agora(),))
+        self._migrar()
+
+    def _migrar(self) -> None:
+        """Acrescenta colunas novas em tabelas que já existiam (o CREATE IF NOT EXISTS não altera tabela pronta)."""
+        for comando in ("ALTER TABLE assinatura_push ADD COLUMN nome VARCHAR(80)",):
+            try:
+                self._executar(comando)
+            except Exception:  # noqa: BLE001 - a coluna já existe
+                pass
 
     @property
     def descricao(self) -> str:
@@ -320,15 +339,45 @@ class Banco:
                        (round(valor, 2), _agora()))
 
     # ------------------------------------------------------------ Web Push
-    def salvar_assinatura(self, endpoint: str, p256dh: str, auth: str) -> None:
-        """Guarda (ou atualiza) a assinatura push de um aparelho."""
+    def salvar_assinatura(self, endpoint: str, p256dh: str, auth: str, nome: Optional[str] = None) -> None:
+        """Guarda (ou atualiza) a assinatura push de um aparelho. O nome só muda se vier preenchido."""
         self._executar(
-            "INSERT INTO assinatura_push (endpoint, p256dh, auth, criada_em) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth",
-            (endpoint, p256dh, auth, _agora()))
+            "INSERT INTO assinatura_push (endpoint, p256dh, auth, nome, criada_em) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, "
+            "nome = COALESCE(excluded.nome, assinatura_push.nome)",
+            (endpoint, p256dh, auth, nome, _agora()))
 
     def remover_assinatura(self, endpoint: str) -> None:
         self._executar("DELETE FROM assinatura_push WHERE endpoint = ?", (endpoint,))
 
     def listar_assinaturas(self) -> List[Dict[str, Any]]:
-        return self._consultar("SELECT endpoint, p256dh, auth FROM assinatura_push ORDER BY id")
+        return self._consultar("SELECT id, endpoint, p256dh, auth FROM assinatura_push ORDER BY id")
+
+    def listar_aparelhos(self) -> List[Dict[str, Any]]:
+        """Aparelhos cadastrados para a tela de Configurações (sem expor endpoint nem chaves)."""
+        return self._consultar(
+            "SELECT s.id, s.nome, s.criada_em, "
+            "(SELECT e.resultado FROM envio_push e WHERE e.assinatura_id = s.id ORDER BY e.id DESC LIMIT 1) AS ultimo_resultado, "
+            "(SELECT e.enviado_em FROM envio_push e WHERE e.assinatura_id = s.id ORDER BY e.id DESC LIMIT 1) AS ultimo_envio "
+            "FROM assinatura_push s ORDER BY s.id")
+
+    def renomear_aparelho(self, aparelho_id: int, nome: str) -> bool:
+        self._executar("UPDATE assinatura_push SET nome = ? WHERE id = ?", (nome, aparelho_id))
+        return bool(self._consultar("SELECT id FROM assinatura_push WHERE id = ?", (aparelho_id,)))
+
+    def remover_aparelho(self, aparelho_id: int) -> bool:
+        existia = bool(self._consultar("SELECT id FROM assinatura_push WHERE id = ?", (aparelho_id,)))
+        self._executar("DELETE FROM assinatura_push WHERE id = ?", (aparelho_id,))
+        return existia
+
+    def registrar_envio_push(self, assinatura_id: Optional[int], alerta_id: Optional[int], resultado: str,
+                             codigo: Optional[int] = None, detalhe: Optional[str] = None) -> None:
+        """Guarda o resultado de cada tentativa de push (OK ou FALHA) para auditoria."""
+        self._executar(
+            "INSERT INTO envio_push (assinatura_id, alerta_id, resultado, codigo, detalhe, enviado_em) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (assinatura_id, alerta_id, resultado, codigo, (detalhe or "")[:255] or None, _agora()))
+
+    def listar_envios_push(self, limite: int = 50) -> List[Dict[str, Any]]:
+        return self._consultar("SELECT id, assinatura_id, alerta_id, resultado, codigo, detalhe, enviado_em "
+                               "FROM envio_push ORDER BY id DESC LIMIT ?", (limite,))

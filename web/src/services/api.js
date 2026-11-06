@@ -52,6 +52,10 @@ export const api = {
   chavePush: () => requisitar("/push/chave"),
   salvarAssinaturaPush: (assinatura) =>
     requisitar("/push/assinaturas", { method: "POST", body: JSON.stringify(assinatura) }),
+  aparelhos: () => requisitar("/push/aparelhos"),
+  renomearAparelho: (id, nome) =>
+    requisitar(`/push/aparelhos/${id}`, { method: "PATCH", body: JSON.stringify({ nome }) }),
+  removerAparelho: (id) => requisitar(`/push/aparelhos/${id}`, { method: "DELETE" }),
 
   urlQuadro: () => `${BASE}/quadro`,
   urlWebSocket: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/ws`,

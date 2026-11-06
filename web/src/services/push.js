@@ -14,6 +14,17 @@ function chaveParaBytes(base64url) {
   return Uint8Array.from(bruto, (c) => c.charCodeAt(0));
 }
 
+/** Nome sugerido para o aparelho na lista (ex.: "iPhone", "Android", "Windows"). */
+export function nomeDoAparelho() {
+  const ua = navigator.userAgent;
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/Android/i.test(ua)) return "Android";
+  if (/Windows/i.test(ua)) return "Windows";
+  if (/Mac/i.test(ua)) return "Mac";
+  return "Aparelho";
+}
+
 /** Pede permissão, cria a assinatura e envia para a API. Devolve "ativo" ou o motivo da falha. */
 export async function ativarPush() {
   if (!pushDisponivel()) return "indisponivel";
@@ -25,7 +36,7 @@ export async function ativarPush() {
     const assinatura =
       (await registro.pushManager.getSubscription()) ??
       (await registro.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chaveParaBytes(chave) }));
-    await api.salvarAssinaturaPush(assinatura.toJSON());
+    await api.salvarAssinaturaPush({ ...assinatura.toJSON(), nome: nomeDoAparelho() });
     return "ativo";
   } catch {
     return "erro";
