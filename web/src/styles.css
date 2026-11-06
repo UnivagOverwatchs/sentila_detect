@@ -475,6 +475,7 @@ p {
 .video__vazio {
   position: absolute;
   inset: 0;
+  background: radial-gradient(ellipse at center, #182338 0%, #0b1220 75%);
   display: flex;
   flex-direction: column;
   align-items: center;

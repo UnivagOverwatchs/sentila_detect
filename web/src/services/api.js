@@ -49,6 +49,6 @@ export const api = {
     requisitar("/contatos", { method: "POST", body: JSON.stringify(contato) }),
   removerContato: (id) => requisitar(`/contatos/${id}`, { method: "DELETE" }),
 
-  urlVideo: () => `${BASE}/video`,
+  urlQuadro: () => `${BASE}/quadro`,
   urlWebSocket: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/ws`,
 };

@@ -18,6 +18,7 @@ Depois abra http://localhost:8000
 import argparse
 import faulthandler
 import os
+import threading
 
 import uvicorn
 from dotenv import load_dotenv
@@ -30,6 +31,38 @@ from sentinela_api.banco import Banco  # noqa: E402
 from sentinela_api.servico_visao import ServicoVisao  # noqa: E402
 
 PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
+TEMPO_MAX_ENCERRAMENTO_S = 5
+
+
+class ServidorUvicorn(uvicorn.Server):
+    """
+    uvicorn com Ctrl+C garantido.
+
+    Problema: no Ctrl+C o uvicorn cancela WebSocket/vídeo, mas depois espera o navegador
+    fechar as conexões keep-alive; com a aba aberta isso nunca acontece e o terminal travava.
+    Solução: 1º Ctrl+C -> desliga a câmera e pede encerramento normal; se em 5 s ainda não
+    saiu, força a saída. 2º Ctrl+C -> sai na hora.
+    """
+
+    def __init__(self, config: uvicorn.Config, servico: ServicoVisao):
+        super().__init__(config)
+        self.servico = servico
+
+    def handle_exit(self, sig, frame) -> None:
+        if self.should_exit:  # segundo Ctrl+C
+            print("\n[Sentinela] Saindo imediatamente.", flush=True)
+            os._exit(1)
+        print("\n[Sentinela] Encerrando... (Ctrl+C de novo para sair na hora)", flush=True)
+        super().handle_exit(sig, frame)
+        self.servico.parar()  # libera a câmera já no primeiro Ctrl+C
+        relogio = threading.Timer(TEMPO_MAX_ENCERRAMENTO_S, self._forcar_saida)
+        relogio.daemon = True  # se o encerramento normal terminar antes, o relógio morre junto
+        relogio.start()
+
+    @staticmethod
+    def _forcar_saida() -> None:
+        print("[Sentinela] Conexões do navegador não fecharam; encerramento forçado.", flush=True)
+        os._exit(0)
 
 
 def main() -> None:
@@ -52,10 +85,15 @@ def main() -> None:
         print("[Sentinela] Interface não compilada. Rode:  cd web && npm install && npm run build")
 
     print(f"[Sentinela] Abra http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.porta}")
+    config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB), host=args.host, port=args.porta,
+                            log_level="warning", timeout_graceful_shutdown=2)
     try:
-        uvicorn.run(criar_app(banco, servico, PASTA_WEB), host=args.host, port=args.porta, log_level="warning")
+        ServidorUvicorn(config, servico).run()
+    except KeyboardInterrupt:
+        pass
     finally:
         servico.parar()
+        print("[Sentinela] Servidor encerrado.", flush=True)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@ app.py - Rotas da API usadas pela PWA.
 
 Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/status              estado geral, FPS, pessoas, pendentes
-    GET    /api/video               vídeo ao vivo (MJPEG: funciona direto em <img src>)
+    GET    /api/quadro              quadro atual em JPEG (a PWA busca em sequência: vídeo sem prender conexão)
+    GET    /api/video               vídeo MJPEG contínuo (para VLC/outros; a PWA não usa)
     GET    /api/alertas             lista com filtros ?status=&tipo=&limite=
     PATCH  /api/alertas/{id}        resolver ou marcar falso alarme
     GET    /api/alertas/{id}/imagem foto do momento do alerta
@@ -25,7 +26,7 @@ import os
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -82,6 +83,13 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
     @app.get("/api/status")
     def obter_status():
         return montar_status()
+
+    @app.get("/api/quadro")
+    def quadro_atual():
+        # Requisição curta (abre, entrega 1 JPEG, fecha). O navegador limita ~6 conexões por
+        # servidor; um stream contínuo por <img> esgotava esse limite e congelava a interface.
+        return Response(content=servico.jpeg_atual(), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
 
     @app.get("/api/video")
     async def video(request: Request):
@@ -156,13 +164,16 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
     @app.websocket("/api/ws")
     async def tempo_real(ws: WebSocket):
         await ws.accept()
-        ultimo_id = banco.ultimo_alerta_id()  # só avisa alertas que surgirem após a conexão
+        # Consultas ao banco rodam em outra thread (asyncio.to_thread): com o PostgreSQL num
+        # servidor, cada consulta leva alguns ms de rede e não pode bloquear o loop da API.
+        ultimo_id = await asyncio.to_thread(banco.ultimo_alerta_id)  # só avisa alertas novos
         try:
             while True:
-                for alerta in reversed(banco.listar_alertas(depois_de_id=ultimo_id)):
+                novos = await asyncio.to_thread(banco.listar_alertas, depois_de_id=ultimo_id)
+                for alerta in reversed(novos):
                     await ws.send_json({"tipo": "alerta", "alerta": alerta})
                     ultimo_id = max(ultimo_id, alerta["id"])
-                await ws.send_json({"tipo": "status", "status": montar_status()})
+                await ws.send_json({"tipo": "status", "status": await asyncio.to_thread(montar_status)})
                 await asyncio.sleep(INTERVALO_STATUS_S)
         except (WebSocketDisconnect, RuntimeError):
             pass  # navegador fechou a aba

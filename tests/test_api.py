@@ -96,6 +96,15 @@ def test_queda_simulada_vira_alerta_pendente_com_imagem(ambiente):
     assert cliente.get("/api/status").json()["pendentes"] == 1
 
 
+def test_quadro_atual_e_jpeg_sem_cache(ambiente):
+    _, _, cliente = ambiente
+    r = cliente.get("/api/quadro")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.headers["cache-control"] == "no-store"
+    assert r.content[:2] == b"\xff\xd8"  # assinatura de arquivo JPEG
+
+
 def test_tratar_alerta_registra_quem_e_quando(ambiente):
     banco, _, cliente = ambiente
     alerta = banco.registrar_alerta(1, 1, "queda", 0.9, None)

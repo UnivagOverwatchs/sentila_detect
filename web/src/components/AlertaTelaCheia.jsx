@@ -9,6 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { api } from "../services/api.js";
+import { VideoAoVivo } from "./VideoAoVivo.jsx";
 import { TITULO_TIPO, haQuantoTempo } from "../services/formato.js";
 import { IconeAlerta, IconeCamera, IconeCheck, IconeImagem, IconeTelefone } from "./Icones.jsx";
 
@@ -56,7 +57,7 @@ export function AlertaTelaCheia({ alerta, contatoEmergencia, aoTratar, totalPend
 
         <div className="emergencia__midia">
           {aoVivo ? (
-            <img src={api.urlVideo()} alt={`Câmera ao vivo - ${alerta.camera_nome}`} />
+            <VideoAoVivo alt={`Câmera ao vivo - ${alerta.camera_nome}`} />
           ) : semFoto ? (
             <span className="emergencia__sem-foto">Foto indisponível — use “Ver câmera ao vivo”</span>
           ) : (
