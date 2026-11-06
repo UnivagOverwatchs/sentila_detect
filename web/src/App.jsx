@@ -17,6 +17,7 @@ import { AlertaTelaCheia } from "./components/AlertaTelaCheia.jsx";
 import { Painel } from "./pages/Painel.jsx";
 import { Historico } from "./pages/Historico.jsx";
 import { Configuracoes } from "./pages/Configuracoes.jsx";
+import { Login } from "./pages/Login.jsx";
 import { useTempoReal } from "./hooks/useTempoReal.js";
 import { api } from "./services/api.js";
 import { armazenamento } from "./services/armazenamento.js";
@@ -33,7 +34,7 @@ function paginaDoHash() {
   return TITULOS[id] ? id : "painel";
 }
 
-export default function App() {
+function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
   const [pagina, setPagina] = useState(paginaDoHash);
   const [alertas, setAlertas] = useState(armazenamento.ultimosAlertas);
   const [cameras, setCameras] = useState([]);
@@ -139,6 +140,9 @@ export default function App() {
   const cameraParada = status && status.camera_ativa && (status.erro || !status.camera_online);
   const estado = !conectado ? "offline" : cameraParada ? "camera" : status?.estado ?? "normal";
   const alertaAberto = fila[0];
+  const admin = !usuario || usuario.papel === "ADMIN"; // sem login (uso local) tudo fica liberado
+  const nomeExibido = usuario?.nome ?? nomeCuidador;
+  const rotuloPapel = usuario ? (usuario.papel === "ADMIN" ? "Administrador" : "Cuidador") : "Cuidador responsável";
   const [titulo, subtitulo] = TITULOS[pagina];
 
   return (
@@ -150,7 +154,9 @@ export default function App() {
         subtitulo={subtitulo}
         estado={estado}
         cameras={cameras}
-        nomeCuidador={nomeCuidador}
+        nomeCuidador={nomeExibido}
+        rotuloPapel={rotuloPapel}
+        aoSair={loginObrigatorio ? aoSair : undefined}
       >
         {pagina === "painel" && (
           <Painel
@@ -173,6 +179,8 @@ export default function App() {
             aoRemoverContato={removerContato}
             nomeCuidador={nomeCuidador}
             aoSalvarNome={salvarNome}
+            admin={admin}
+            usuarioLogado={usuario}
           />
         )}
       </Layout>
@@ -187,4 +195,39 @@ export default function App() {
       )}
     </>
   );
+}
+
+/** Porteiro: pergunta ao servidor se o login é exigido e mostra a tela de entrada quando preciso. */
+export default function App() {
+  const [acesso, setAcesso] = useState({ fase: "verificando", usuario: null, loginObrigatorio: false });
+
+  useEffect(() => {
+    api
+      .eu()
+      .then((r) =>
+        setAcesso({ fase: r.login_obrigatorio && !r.usuario ? "login" : "ok", usuario: r.usuario, loginObrigatorio: r.login_obrigatorio })
+      )
+      // Servidor fora do ar: abre o app mesmo assim (ele mostra "Sem conexão" e os últimos alertas salvos).
+      .catch(() => setAcesso({ fase: "ok", usuario: null, loginObrigatorio: false }));
+  }, []);
+
+  useEffect(() => {
+    const expirou = () => setAcesso({ fase: "login", usuario: null, loginObrigatorio: true });
+    window.addEventListener("sentinela:sessao-expirada", expirou);
+    return () => window.removeEventListener("sentinela:sessao-expirada", expirou);
+  }, []);
+
+  async function sair() {
+    try {
+      await api.logout();
+    } finally {
+      setAcesso({ fase: "login", usuario: null, loginObrigatorio: true });
+    }
+  }
+
+  if (acesso.fase === "verificando") return null;
+  if (acesso.fase === "login") {
+    return <Login aoEntrar={(usuario) => setAcesso({ fase: "ok", usuario, loginObrigatorio: true })} />;
+  }
+  return <Aplicativo usuario={acesso.usuario} loginObrigatorio={acesso.loginObrigatorio} aoSair={sair} />;
 }

@@ -22,19 +22,24 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/push/envios         últimos envios de push (OK/FALHA)
     WS     /api/ws                  tempo real: status a cada 1 s + alertas novos na hora
 
-Ainda sem login/JWT (previsto na API Node.js). Por isso o servidor escuta só em
-127.0.0.1 por padrão; ver servidor.py --host.
+Login (autenticacao.py): só é exigido com LOGIN_OBRIGATORIO=1 (servidor público). Sem isso o painel
+fica aberto e o servidor escuta só em 127.0.0.1 por padrão; ver servidor.py --host.
+    POST /api/login  /api/logout   GET /api/eu   GET/POST/PATCH /api/usuarios (só ADMIN)
 """
 
 import asyncio
+import math
 import os
 from typing import Literal, Optional
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.requests import HTTPConnection
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import autenticacao as auth
 from .banco import Banco
 from .sensibilidade import aplicar_sensibilidade, rotulo_sensibilidade
 from .servico_visao import ServicoVisao
@@ -78,15 +83,78 @@ class RemoverAssinatura(BaseModel):
     endpoint: str = Field(min_length=10, max_length=2000)
 
 
+class Login(BaseModel):
+    usuario: str = Field(min_length=1, max_length=60)
+    senha: str = Field(min_length=1, max_length=200)
+
+
+class NovoUsuario(BaseModel):
+    usuario: str = Field(pattern=r"^[a-z0-9._-]{3,60}$")
+    nome: str = Field(min_length=1, max_length=120)
+    senha: str = Field(min_length=1, max_length=200)
+    papel: Literal["ADMIN", "CUIDADOR"] = "CUIDADOR"
+
+
+class AtualizarUsuario(BaseModel):
+    nome: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    papel: Optional[Literal["ADMIN", "CUIDADOR"]] = None
+    ativo: Optional[bool] = None
+    senha: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
 class NovoContato(BaseModel):
     nome: str = Field(min_length=1, max_length=120)
     telefone: str = Field(min_length=3, max_length=20, pattern=r"^[0-9+()\-\s]+$")
     tipo: str = Field(default="Familiar", max_length=30)
 
 
-def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None, push=None) -> FastAPI:
-    """Fábrica da aplicação: recebe as dependências prontas (facilita os testes)."""
-    app = FastAPI(title="Sentinela API", version="0.1.0")
+# Rotas abertas mesmo com login obrigatório (a tela de login precisa delas).
+ROTAS_PUBLICAS = {"/api/login", "/api/logout", "/api/eu"}
+# CUIDADOR só lê estas áreas; quem altera é o ADMIN.
+ADMIN_SO_ESCRITA = ("/api/configuracao", "/api/cameras", "/api/contatos")
+# Áreas inteiras só do ADMIN.
+ADMIN_TOTAL = ("/api/usuarios", "/api/push/aparelhos", "/api/push/envios")
+
+
+def _exige_admin(metodo: str, caminho: str) -> bool:
+    if any(caminho == a or caminho.startswith(a + "/") for a in ADMIN_TOTAL):
+        return True
+    return metodo not in ("GET", "HEAD", "OPTIONS") and any(
+        caminho == a or caminho.startswith(a + "/") for a in ADMIN_SO_ESCRITA)
+
+
+def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None, push=None,
+              exigir_login: bool = False, cookie_seguro: bool = False,
+              limitador: Optional[auth.LimitadorLogin] = None) -> FastAPI:
+    """Fábrica da aplicação: recebe as dependências prontas (facilita os testes).
+
+    exigir_login=False mantém o painel aberto (uso local). Em servidor público, use True.
+    """
+    limitador = limitador or auth.LimitadorLogin()
+
+    def usuario_da_conexao(conn: HTTPConnection) -> Optional[dict]:
+        token = conn.cookies.get(auth.COOKIE_SESSAO)
+        return banco.obter_usuario_da_sessao(auth.hash_token(token)) if token else None
+
+    def proteger(conn: HTTPConnection) -> None:
+        """Roda antes de toda rota HTTP: confere origem (CSRF), login e papel."""
+        if conn.scope["type"] != "http":
+            return  # o WebSocket confere o cookie por conta própria
+        metodo, caminho = conn.scope["method"], conn.url.path
+        if metodo not in ("GET", "HEAD", "OPTIONS"):
+            origem = conn.headers.get("origin")
+            if origem and urlparse(origem).netloc != conn.headers.get("host", ""):
+                raise HTTPException(403, "Origem não permitida")
+        if not exigir_login or caminho in ROTAS_PUBLICAS or not caminho.startswith("/api/"):
+            return
+        usuario = usuario_da_conexao(conn)
+        if usuario is None:
+            raise HTTPException(401, "Não autenticado")
+        if usuario["papel"] != "ADMIN" and _exige_admin(metodo, caminho):
+            raise HTTPException(403, "Apenas administradores")
+        conn.state.usuario = usuario
+
+    app = FastAPI(title="Sentinela API", version="0.1.0", dependencies=[Depends(proteger)])
 
     # Aplica a sensibilidade salva ao detector já na inicialização.
     aplicar_sensibilidade(servico.cfg_queda, banco.obter_sensibilidade())
@@ -132,10 +200,12 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         return banco.listar_alertas(status=status, tipo=tipo, limite=min(max(limite, 1), 500))
 
     @app.patch("/api/alertas/{alerta_id}")
-    def tratar_alerta(alerta_id: int, dados: TratarAlerta):
+    def tratar_alerta(alerta_id: int, dados: TratarAlerta, request: Request):
         if banco.obter_alerta(alerta_id) is None:
             raise HTTPException(404, "Alerta não encontrado")
-        return banco.tratar_alerta(alerta_id, dados.status, dados.tratado_por)
+        # Com login, quem tratou é o usuário da sessão (não o texto enviado pelo navegador).
+        usuario = getattr(request.state, "usuario", None)
+        return banco.tratar_alerta(alerta_id, dados.status, usuario["nome"] if usuario else dados.tratado_por)
 
     @app.get("/api/alertas/{alerta_id}/imagem")
     def imagem_alerta(alerta_id: int):
@@ -185,6 +255,78 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         banco.remover_contato(contato_id)
 
     # ------------------------------------------------------------ tempo real
+    # ------------------------------------------------------------ login e usuários
+    def definir_cookie(resposta: Response, token: str) -> None:
+        resposta.set_cookie(auth.COOKIE_SESSAO, token, max_age=auth.DURACAO_SESSAO_S, httponly=True,
+                            samesite="lax", secure=cookie_seguro, path="/")
+
+    @app.post("/api/login")
+    def entrar(dados: Login, resposta: Response):
+        chave = dados.usuario.strip().lower()
+        espera = limitador.segundos_restantes(chave)
+        if espera:
+            raise HTTPException(429, f"Muitas tentativas. Tente de novo em {math.ceil(espera / 60)} min.",
+                                headers={"Retry-After": str(espera)})
+        registro = banco.obter_usuario_para_login(chave)
+        # Verifica sempre (com hash falso se o usuário não existe): o tempo de resposta não revela quem existe.
+        senha_ok = auth.verificar_senha(dados.senha, registro["senha_hash"] if registro else auth.HASH_FALSO)
+        if not (registro and registro["ativo"] and senha_ok):
+            limitador.registrar_erro(chave)
+            raise HTTPException(401, "Usuário ou senha inválidos")
+        limitador.registrar_sucesso(chave)
+        token = auth.novo_token()
+        banco.criar_sessao(auth.hash_token(token), registro["id"], auth.DURACAO_SESSAO_S)
+        banco.limpar_sessoes_expiradas()
+        definir_cookie(resposta, token)
+        return {"usuario": registro["usuario"], "nome": registro["nome"], "papel": registro["papel"]}
+
+    @app.post("/api/logout", status_code=204)
+    def sair(request: Request, resposta: Response):
+        token = request.cookies.get(auth.COOKIE_SESSAO)
+        if token:
+            banco.encerrar_sessao(auth.hash_token(token))
+        resposta.delete_cookie(auth.COOKIE_SESSAO, path="/")
+
+    @app.get("/api/eu")
+    def quem_sou_eu(request: Request):
+        """A tela usa isto ao abrir: diz se o login é exigido e quem está logado (sem dar erro 401)."""
+        usuario = usuario_da_conexao(request) if exigir_login else None
+        publico = {k: usuario[k] for k in ("usuario", "nome", "papel")} if usuario else None
+        return {"login_obrigatorio": exigir_login, "usuario": publico}
+
+    @app.get("/api/usuarios")
+    def listar_usuarios():
+        return banco.listar_usuarios()
+
+    @app.post("/api/usuarios", status_code=201)
+    def criar_usuario(dados: NovoUsuario):
+        erro = auth.validar_senha_nova(dados.senha)
+        if erro:
+            raise HTTPException(422, erro)
+        if banco.obter_usuario_para_login(dados.usuario):
+            raise HTTPException(409, "Já existe um usuário com esse login")
+        return banco.criar_usuario(dados.usuario, dados.nome.strip(), auth.hash_senha(dados.senha), dados.papel)
+
+    @app.patch("/api/usuarios/{usuario_id}")
+    def atualizar_usuario(usuario_id: int, dados: AtualizarUsuario, request: Request):
+        alvo = banco.obter_usuario(usuario_id)
+        if alvo is None:
+            raise HTTPException(404, "Usuário não encontrado")
+        eu = getattr(request.state, "usuario", None)
+        if eu and eu["id"] == usuario_id and (dados.ativo is False or dados.papel == "CUIDADOR"):
+            raise HTTPException(400, "Você não pode desativar nem rebaixar a si mesmo")
+        senha_hash = None
+        if dados.senha is not None:
+            erro = auth.validar_senha_nova(dados.senha)
+            if erro:
+                raise HTTPException(422, erro)
+            senha_hash = auth.hash_senha(dados.senha)
+        atualizado = banco.atualizar_usuario(usuario_id, nome=dados.nome.strip() if dados.nome else None,
+                                             papel=dados.papel, ativo=dados.ativo, senha_hash=senha_hash)
+        if senha_hash or dados.ativo is False or dados.papel:
+            banco.encerrar_sessoes_do_usuario(usuario_id)  # nova senha/desativação/novo papel: entra de novo
+        return atualizado
+
     # ---- Web Push (aviso com o app fechado)
     @app.get("/api/push/chave")
     def chave_push():
@@ -222,6 +364,9 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
 
     @app.websocket("/api/ws")
     async def tempo_real(ws: WebSocket):
+        if exigir_login and not await asyncio.to_thread(usuario_da_conexao, ws):
+            await ws.close(code=4401)  # sem sessão válida: a conexão é recusada
+            return
         await ws.accept()
         # Consultas ao banco rodam em outra thread (asyncio.to_thread): com o PostgreSQL num
         # servidor, cada consulta leva alguns ms de rede e não pode bloquear o loop da API.

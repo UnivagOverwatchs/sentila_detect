@@ -24,7 +24,7 @@ reconectamos uma vez e repetimos a operação.
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -67,6 +67,22 @@ CREATE TABLE IF NOT EXISTS assinatura_push (
     auth       VARCHAR(255) NOT NULL,
     nome       VARCHAR(80),
     criada_em  TIMESTAMP NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usuario (
+    id          {pk},
+    usuario     VARCHAR(60)  NOT NULL UNIQUE,
+    nome        VARCHAR(120) NOT NULL,
+    senha_hash  VARCHAR(255) NOT NULL,
+    papel       VARCHAR(10)  NOT NULL DEFAULT 'CUIDADOR' CHECK (papel IN ('ADMIN', 'CUIDADOR')),
+    ativo       BOOLEAN      NOT NULL DEFAULT {verdadeiro},
+    criado_em   TIMESTAMP    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessao (
+    id          {pk},
+    token_hash  VARCHAR(64) NOT NULL UNIQUE,
+    usuario_id  INTEGER NOT NULL REFERENCES usuario(id),
+    criada_em   TIMESTAMP NOT NULL,
+    expira_em   TIMESTAMP NOT NULL
 );
 CREATE TABLE IF NOT EXISTS envio_push (
     id             {pk},
@@ -381,3 +397,63 @@ class Banco:
     def listar_envios_push(self, limite: int = 50) -> List[Dict[str, Any]]:
         return self._consultar("SELECT id, assinatura_id, alerta_id, resultado, codigo, detalhe, enviado_em "
                                "FROM envio_push ORDER BY id DESC LIMIT ?", (limite,))
+
+    # ------------------------------------------------------------ usuários e sessões (login)
+    _CAMPOS_USUARIO = "id, usuario, nome, papel, ativo, criado_em"
+
+    @staticmethod
+    def _usuario_publico(linha: Dict[str, Any]) -> Dict[str, Any]:
+        linha["ativo"] = bool(linha["ativo"])
+        return linha
+
+    def contar_usuarios(self) -> int:
+        return self._consultar("SELECT COUNT(*) AS n FROM usuario")[0]["n"]
+
+    def criar_usuario(self, usuario: str, nome: str, senha_hash: str, papel: str = "CUIDADOR") -> Dict[str, Any]:
+        novo_id = self._inserir("INSERT INTO usuario (usuario, nome, senha_hash, papel, criado_em) VALUES (?, ?, ?, ?, ?)",
+                                (usuario, nome, senha_hash, papel, _agora()))
+        return self.obter_usuario(novo_id)
+
+    def obter_usuario(self, usuario_id: int) -> Optional[Dict[str, Any]]:
+        linhas = self._consultar(f"SELECT {self._CAMPOS_USUARIO} FROM usuario WHERE id = ?", (usuario_id,))
+        return self._usuario_publico(linhas[0]) if linhas else None
+
+    def obter_usuario_para_login(self, usuario: str) -> Optional[Dict[str, Any]]:
+        """Inclui o hash da senha: use só na verificação do login, nunca devolva à API."""
+        linhas = self._consultar(f"SELECT {self._CAMPOS_USUARIO}, senha_hash FROM usuario WHERE usuario = ?", (usuario,))
+        return self._usuario_publico(linhas[0]) if linhas else None
+
+    def listar_usuarios(self) -> List[Dict[str, Any]]:
+        return [self._usuario_publico(u)
+                for u in self._consultar(f"SELECT {self._CAMPOS_USUARIO} FROM usuario ORDER BY id")]
+
+    def atualizar_usuario(self, usuario_id: int, **campos) -> Optional[Dict[str, Any]]:
+        permitidos = {k: v for k, v in campos.items() if k in {"nome", "papel", "ativo", "senha_hash"} and v is not None}
+        if permitidos:
+            sets = ", ".join(f"{k} = ?" for k in permitidos)  # nomes de coluna vêm de lista fechada
+            self._executar(f"UPDATE usuario SET {sets} WHERE id = ?", (*permitidos.values(), usuario_id))
+        return self.obter_usuario(usuario_id)
+
+    def criar_sessao(self, token_hash: str, usuario_id: int, duracao_s: int) -> None:
+        agora = _agora()
+        self._executar("INSERT INTO sessao (token_hash, usuario_id, criada_em, expira_em) VALUES (?, ?, ?, ?)",
+                       (token_hash, usuario_id, agora, agora + timedelta(seconds=duracao_s)))
+
+    def obter_usuario_da_sessao(self, token_hash: str) -> Optional[Dict[str, Any]]:
+        """Usuário ativo dono de uma sessão ainda válida; None se expirou, foi encerrada ou o usuário foi desativado."""
+        linhas = self._consultar(
+            "SELECT u.id, u.usuario, u.nome, u.papel, u.ativo, u.criado_em FROM sessao s "
+            "JOIN usuario u ON u.id = s.usuario_id WHERE s.token_hash = ? AND s.expira_em > ?",
+            (token_hash, _agora()))
+        if not linhas or not linhas[0]["ativo"]:
+            return None
+        return self._usuario_publico(linhas[0])
+
+    def encerrar_sessao(self, token_hash: str) -> None:
+        self._executar("DELETE FROM sessao WHERE token_hash = ?", (token_hash,))
+
+    def encerrar_sessoes_do_usuario(self, usuario_id: int) -> None:
+        self._executar("DELETE FROM sessao WHERE usuario_id = ?", (usuario_id,))
+
+    def limpar_sessoes_expiradas(self) -> None:
+        self._executar("DELETE FROM sessao WHERE expira_em <= ?", (_agora(),))

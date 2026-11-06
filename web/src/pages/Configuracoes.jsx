@@ -4,6 +4,7 @@
  *   - Câmeras cadastradas: ligar/desligar o monitoramento.
  *   - Contatos de emergência: usados no botão "Ligar" da tela de alerta.
  *   - Este aparelho: nome do cuidador e permissão de notificações.
+ *   - Usuários (só administrador): criar, ativar/desativar e trocar a senha.
  *   - Aparelhos que recebem alertas: lista dos celulares cadastrados para o push (renomear/remover).
  */
 import { useEffect, useState } from "react";
@@ -27,6 +28,8 @@ export function Configuracoes({
   aoRemoverContato,
   nomeCuidador,
   aoSalvarNome,
+  admin = true,
+  usuarioLogado = null,
 }) {
   const [valor, setValor] = useState(sensibilidade ?? 0.65);
   const [novo, setNovo] = useState({ nome: "", telefone: "", tipo: "Familiar" });
@@ -36,6 +39,7 @@ export function Configuracoes({
   const [aparelhos, setAparelhos] = useState([]);
 
   async function carregarAparelhos() {
+    if (!admin) return;
     try {
       setAparelhos(await api.aparelhos());
     } catch {
@@ -100,6 +104,7 @@ export function Configuracoes({
           onTouchEnd={() => aoSalvarSensibilidade(valor)}
           onKeyUp={() => aoSalvarSensibilidade(valor)}
           aria-label="Sensibilidade de detecção"
+          disabled={!admin}
         />
         <div className="deslizante-legenda">
           <span>Menos alertas</span>
@@ -122,7 +127,7 @@ export function Configuracoes({
                 <small>{c.local}</small>
               </div>
               <label className="interruptor">
-                <input type="checkbox" checked={c.ativa} onChange={() => aoAlternarCamera(c)} />
+                <input type="checkbox" checked={c.ativa} disabled={!admin} onChange={() => aoAlternarCamera(c)} />
                 <span aria-hidden="true" />
                 <span className="sr-only">Monitorar {c.nome}</span>
               </label>
@@ -150,13 +155,15 @@ export function Configuracoes({
                   {c.telefone} · {c.tipo}
                 </small>
               </div>
-              <button className="botao-icone" onClick={() => aoRemoverContato(c)} aria-label={`Remover ${c.nome}`}>
-                <IconeFechar tamanho={14} />
-              </button>
+              {admin && (
+                <button className="botao-icone" onClick={() => aoRemoverContato(c)} aria-label={`Remover ${c.nome}`}>
+                  <IconeFechar tamanho={14} />
+                </button>
+              )}
             </li>
           ))}
         </ul>
-        {formAberto ? (
+        {!admin ? null : formAberto ? (
           <form className="form-contato" onSubmit={adicionarContato}>
             <input required placeholder="Nome" value={novo.nome} onChange={(e) => setNovo({ ...novo, nome: e.target.value })} />
             <input
@@ -213,6 +220,9 @@ export function Configuracoes({
         {pushEstado === "ativo" && <p className="dica">Pronto: este aparelho também recebe alertas com o app fechado.</p>}
       </section>
 
+      {admin && <SecaoUsuarios usuarioLogado={usuarioLogado} />}
+
+      {admin && (
       <section className="cartao">
         <header className="cartao__cabecalho">
           <h2>Aparelhos que recebem alertas</h2>
@@ -246,6 +256,111 @@ export function Configuracoes({
           </ul>
         )}
       </section>
+      )}
     </div>
+  );
+}
+
+/** Administração de usuários (só aparece para ADMIN, ou quando o servidor não exige login). */
+function SecaoUsuarios({ usuarioLogado }) {
+  const [usuarios, setUsuarios] = useState([]);
+  const [aberto, setAberto] = useState(false);
+  const [novo, setNovo] = useState({ usuario: "", nome: "", senha: "", papel: "CUIDADOR" });
+  const [erro, setErro] = useState("");
+
+  async function carregar() {
+    try {
+      setUsuarios(await api.usuarios());
+    } catch {
+      /* sem permissão ou sem rede */
+    }
+  }
+
+  useEffect(() => {
+    carregar();
+  }, []);
+
+  async function criar(e) {
+    e.preventDefault();
+    setErro("");
+    try {
+      await api.criarUsuario({ ...novo, usuario: novo.usuario.trim().toLowerCase(), nome: novo.nome.trim() });
+      setNovo({ usuario: "", nome: "", senha: "", papel: "CUIDADOR" });
+      setAberto(false);
+      carregar();
+    } catch (falha) {
+      setErro(typeof falha.detalhe === "string" ? falha.detalhe : "Confira os campos: login com letras minúsculas, números, ponto, hífen ou sublinhado (3 a 60) e senha de 10+ caracteres.");
+    }
+  }
+
+  async function alternarAtivo(u) {
+    try {
+      await api.atualizarUsuario(u.id, { ativo: !u.ativo });
+      carregar();
+    } catch (falha) {
+      window.alert(typeof falha.detalhe === "string" ? falha.detalhe : "Não foi possível alterar.");
+    }
+  }
+
+  async function trocarSenha(u) {
+    const senha = window.prompt(`Nova senha para ${u.nome} (mínimo 10 caracteres)`);
+    if (!senha) return;
+    try {
+      await api.atualizarUsuario(u.id, { senha });
+      window.alert("Senha alterada. As sessões abertas desse usuário foram encerradas.");
+    } catch (falha) {
+      window.alert(typeof falha.detalhe === "string" ? falha.detalhe : "Não foi possível trocar a senha.");
+    }
+  }
+
+  return (
+    <section className="cartao">
+      <header className="cartao__cabecalho">
+        <h2>Usuários</h2>
+        <p>Quem pode entrar no painel. Administrador altera tudo; cuidador acompanha e trata alertas.</p>
+      </header>
+      <ul className="lista-config">
+        {usuarios.map((u) => (
+          <li key={u.id}>
+            <span className="avatar avatar--claro">{u.nome.charAt(0).toUpperCase()}</span>
+            <div className="lista-config__expande">
+              <strong>
+                {u.nome}
+                {usuarioLogado?.usuario === u.usuario ? " (você)" : ""}
+              </strong>
+              <small className="mono">
+                {u.usuario} · {u.papel === "ADMIN" ? "Administrador" : "Cuidador"} · {u.ativo ? "ativo" : "desativado"}
+              </small>
+            </div>
+            <button className="botao botao--fantasma" onClick={() => trocarSenha(u)}>
+              Senha
+            </button>
+            {usuarioLogado?.usuario !== u.usuario && (
+              <button className="botao botao--fantasma" onClick={() => alternarAtivo(u)}>
+                {u.ativo ? "Desativar" : "Ativar"}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {aberto ? (
+        <form className="form-usuario" onSubmit={criar}>
+          <input required placeholder="Login (ex.: maria)" autoCapitalize="none" value={novo.usuario} onChange={(e) => setNovo({ ...novo, usuario: e.target.value })} />
+          <input required placeholder="Nome" value={novo.nome} onChange={(e) => setNovo({ ...novo, nome: e.target.value })} />
+          <input required type="password" autoComplete="new-password" placeholder="Senha (10+ caracteres)" value={novo.senha} onChange={(e) => setNovo({ ...novo, senha: e.target.value })} />
+          <select value={novo.papel} onChange={(e) => setNovo({ ...novo, papel: e.target.value })}>
+            <option value="CUIDADOR">Cuidador</option>
+            <option value="ADMIN">Administrador</option>
+          </select>
+          <button className="botao" type="submit">Criar</button>
+          <button className="botao botao--fantasma" type="button" onClick={() => setAberto(false)}>Cancelar</button>
+          {erro && <p className="erro">{erro}</p>}
+        </form>
+      ) : (
+        <button className="botao-tracejado" onClick={() => setAberto(true)}>
+          <IconeMais tamanho={14} /> Adicionar usuário
+        </button>
+      )}
+    </section>
   );
 }

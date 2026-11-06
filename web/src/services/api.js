@@ -11,16 +11,33 @@ const BASE = "/api";
 async function requisitar(caminho, opcoes = {}) {
   const resposta = await fetch(BASE + caminho, {
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     ...opcoes,
   });
   if (!resposta.ok) {
+    // 401 fora do login = sessão expirada: a tela volta para o login.
+    if (resposta.status === 401 && caminho !== "/login") window.dispatchEvent(new Event("sentinela:sessao-expirada"));
     const detalhe = await resposta.text();
-    throw new Error(`Erro ${resposta.status}: ${detalhe}`);
+    const erro = new Error(`Erro ${resposta.status}: ${detalhe}`);
+    erro.status = resposta.status;
+    try {
+      erro.detalhe = JSON.parse(detalhe).detail;
+    } catch {
+      /* resposta sem JSON */
+    }
+    throw erro;
   }
   return resposta.status === 204 ? null : resposta.json();
 }
 
 export const api = {
+  eu: () => requisitar("/eu"),
+  login: (usuario, senha) => requisitar("/login", { method: "POST", body: JSON.stringify({ usuario, senha }) }),
+  logout: () => requisitar("/logout", { method: "POST" }),
+  usuarios: () => requisitar("/usuarios"),
+  criarUsuario: (dados) => requisitar("/usuarios", { method: "POST", body: JSON.stringify(dados) }),
+  atualizarUsuario: (id, dados) => requisitar(`/usuarios/${id}`, { method: "PATCH", body: JSON.stringify(dados) }),
+
   status: () => requisitar("/status"),
 
   alertas: ({ status, tipo, limite = 100 } = {}) => {
