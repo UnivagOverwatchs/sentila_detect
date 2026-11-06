@@ -30,7 +30,7 @@ from sentinela_api.app import criar_app  # noqa: E402
 from sentinela_api.banco import Banco  # noqa: E402
 from sentinela_api.notificador_remoto import NotificadorRemoto  # noqa: E402
 from sentinela_api.push import ServicoPush  # noqa: E402
-from sentinela_api.servico_visao import ServicoVisao  # noqa: E402
+from sentinela_api.servico_visao import ServicoRemoto, ServicoVisao  # noqa: E402
 
 PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
 TEMPO_MAX_ENCERRAMENTO_S = 5
@@ -46,7 +46,7 @@ class ServidorUvicorn(uvicorn.Server):
     saiu, força a saída. 2º Ctrl+C -> sai na hora.
     """
 
-    def __init__(self, config: uvicorn.Config, servico: ServicoVisao):
+    def __init__(self, config: uvicorn.Config, servico):
         super().__init__(config)
         self.servico = servico
 
@@ -75,23 +75,30 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 para acessar pelo celular na rede")
     parser.add_argument("--porta", type=int, default=8000)
     parser.add_argument("--banco", default="sentinela.db", help="arquivo SQLite (usado só sem Postgres no .env)")
+    parser.add_argument("--painel", action="store_true", default=os.getenv("MODO_PAINEL", "0") == "1",
+                        help="modo painel: só API, interface, login e push (sem câmera nem detecção). "
+                             "Usado na VPS; a detecção roda em outro computador que grava no mesmo banco")
     args = parser.parse_args()
 
     banco = Banco(args.banco)  # PostgreSQL se o .env tiver DATABASE_URL/PGHOST; senão SQLite local
     print(f"[Sentinela] Banco de dados: {banco.descricao}")
-    camera = banco.garantir_camera(args.camera, args.local, args.fonte)
+    camera = None if args.painel else banco.garantir_camera(args.camera, args.local, args.fonte)
     push = ServicoPush(banco)
     if not push.configurado:
         print("[Sentinela] Push desativado: defina VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env "
               "(python -m sentinela_api.push --gerar-chaves).")
-    whatsapp = NotificadorRemoto()
-    if whatsapp.configurado:
-        print(f"[Sentinela] WhatsApp: avisando o notificador em {whatsapp.url}")
-        if os.getenv("WHATSAPP_URL"):
-            print("[Sentinela] Atenção: WHATSAPP_URL também está definido; deixe vazio para não enviar em dobro.")
+    if args.painel:
+        servico = ServicoRemoto(banco)
+        print("[Sentinela] Modo painel: sem câmera neste servidor (a detecção roda em outro computador).")
     else:
-        print("[Sentinela] WhatsApp: NOTIFICADOR_URL/NOTIFICADOR_TOKEN não configurados (sem envio imediato).")
-    servico = ServicoVisao(banco, camera, args.fonte, servico_push=push, notificador_remoto=whatsapp)
+        whatsapp = NotificadorRemoto()
+        if whatsapp.configurado:
+            print(f"[Sentinela] WhatsApp: avisando o notificador em {whatsapp.url}")
+            if os.getenv("WHATSAPP_URL"):
+                print("[Sentinela] Atenção: WHATSAPP_URL também está definido; deixe vazio para não enviar em dobro.")
+        else:
+            print("[Sentinela] WhatsApp: NOTIFICADOR_URL/NOTIFICADOR_TOKEN não configurados (sem envio imediato).")
+        servico = ServicoVisao(banco, camera, args.fonte, servico_push=push, notificador_remoto=whatsapp)
     servico.iniciar()
 
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):

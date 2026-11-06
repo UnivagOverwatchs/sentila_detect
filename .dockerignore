@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.env.*
+**/__pycache__
+alertas_queda
+modelos
+dataset
+dataset2
+runs
+tests
+web/node_modules
+web/dist
+*.pt
+*.db
+*.tar.gz

@@ -11,3 +11,6 @@ modelos/
 web/node_modules/
 web/dist/
 sentinela.db
+
+# Pacotes de implantação gerados com git archive
+*.tar.gz
