@@ -109,6 +109,23 @@ O `--dry-run` deve terminar com "simulated renewal succeeded". Se não houver um
 Nada muda no código. Só confira que o `.env` dele continua apontando para o mesmo banco e usa as mesmas
 chaves VAPID. Os celulares se cadastram **no endereço novo** (Configurações → Ativar notificações).
 
+## 10. Avisos por WhatsApp (opcional, repositório `sentinela_whatsapp`)
+
+O notificador (`UnivagOverwatchs/sentinela_whatsapp`) roda em containers próprios (`whatsapp-api` + `notificador`),
+lê o **mesmo PostgreSQL** e envia a mensagem aos contatos de emergência. Quem detecta (o computador com a câmera)
+apenas o acorda por `POST /notificar`; o painel da VPS **não** detecta nem avisa, só mostra os alertas.
+
+1. Suba o notificador seguindo o README daquele repositório (`compose.servidor.yaml`, `.env` com `PG*`,
+   `NOTIF_TOKEN` e `--parear` para o QR Code na primeira vez).
+2. No `.env` do **computador que detecta**, defina `NOTIFICADOR_URL=http://<servidor-do-notificador>:8100` e
+   `NOTIFICADOR_TOKEN=<o mesmo NOTIF_TOKEN>`. Deixe `WHATSAPP_URL` vazio, senão a mensagem sai em dobro.
+3. Libere a porta 8100 no firewall só para o IP do computador que detecta.
+4. Teste: `curl http://<servidor>:8100/saude` deve mostrar `"whatsapp_conectado": true`.
+
+Se o aviso imediato falhar, o notificador encontra o alerta sozinho no banco em poucos segundos.
+Limitação atual: a foto do alerta só entra na mensagem se o notificador alcançar `SENTINELA_API_URL`
+(a API do computador que detecta), pois o painel da VPS não tem as fotos.
+
 ## Atualizar depois
 
 Envie um pacote novo, descompacte por cima (o `.env` não está no pacote) e rode:
