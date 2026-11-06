@@ -11,7 +11,7 @@ Fluxo por quadro:
           -> MaquinaEstadosQueda.atualizar()  (decide NORMAL / CAINDO / NO_CHAO / ALERTA)
 
 Estados:
-    NORMAL   : pessoa em pé, sentada ou andando.
+    NORMAL   : pessoa em pé, sentada, andando ou deitada DENTRO da área da cama (deitar na cama é normal).
     CAINDO   : postura deitada depois de uma DESCIDA vista: brusca (impacto) ou lenta
                (quadril desceu aos poucos até o chão). Confirma em poucos segundos.
     NO_CHAO  : postura deitada sem descida vista (ex.: já entrou na imagem deitada).
@@ -111,6 +111,20 @@ def extrair_medidas(pose: Pose, vis_min: float = 0.3,
         tamanho_tronco=tamanho_tronco,
         proporcao_corpo=altura / largura,
     )
+
+
+def ponto_em_poligono(ponto: Tuple[float, float], poligono: List[Tuple[float, float]]) -> bool:
+    """Teste do raio (par/ímpar): True se o ponto está dentro do polígono. Funciona em qualquer unidade."""
+    x, y = ponto
+    dentro = False
+    j = len(poligono) - 1
+    for i in range(len(poligono)):
+        xi, yi = poligono[i]
+        xj, yj = poligono[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
+            dentro = not dentro
+        j = i
+    return dentro
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +230,11 @@ class MaquinaEstadosQueda:
         escala = max(tronco for _, tronco in janela)
         return (janela[-1][0] - y_mais_alto) / max(escala, 1.0) >= self.cfg.desnivel_queda_lenta
 
-    def atualizar(self, agora: float, medidas: Optional[Medidas]) -> Optional[str]:
+    def atualizar(self, agora: float, medidas: Optional[Medidas], na_cama: bool = False) -> Optional[str]:
         """
         Avança a máquina de estados.
         medidas=None significa "pessoa não vista neste quadro".
+        na_cama=True: o quadril está dentro da área da cama; deitar ali é normal, então nada é contado.
         Retorna "queda" ou "pessoa_no_chao" no quadro em que o alerta deve ser disparado.
         """
         cfg = self.cfg
@@ -241,6 +256,12 @@ class MaquinaEstadosQueda:
 
             # Pessoa recém-aparecida: só observa. IDs que "piscam" por 1-2 quadros nunca geram alerta.
             if agora - self._primeira_observacao < cfg.idade_minima_track:
+                return None
+
+            if na_cama:
+                # Cama: zera a contagem e o impacto antigo, para que sair da cama não herde tempo "no chão".
+                self._resetar()
+                self._ultimo_impacto = -1e9
                 return None
 
             deitado = self.ultimo_angulo >= cfg.angulo_deitado
@@ -330,6 +351,16 @@ class DetectorQueda:
         diagonal = math.hypot(largura, altura)
         self.rastreador = RastreadorSimples(self.cfg.distancia_max_rastreio * diagonal)
         self.maquinas: Dict[int, MaquinaEstadosQueda] = {}
+        self.zonas_cama: List[List[Tuple[float, float]]] = []  # polígonos em PIXELS
+
+    def definir_zonas_cama(self, poligonos) -> None:
+        """Recebe polígonos com coordenadas de 0 a 1 da imagem (como a interface os grava) e converte para pixels."""
+        largura, altura = self.limites
+        self.zonas_cama = [[(float(x) * largura, float(y) * altura) for x, y in poli]
+                           for poli in (poligonos or []) if len(poli) >= 3]
+
+    def _na_cama(self, medidas: Medidas) -> bool:
+        return any(ponto_em_poligono(medidas.quadril, zona) for zona in self.zonas_cama)
 
     def processar(self, poses: List[Pose], agora: float) -> Tuple[List[EstadoPessoa], List[EventoAlerta]]:
         # 1. Extrai medidas e descarta poses inválidas: tronco fora da imagem/pouco visível,
@@ -349,7 +380,7 @@ class DetectorQueda:
         for (pose, medidas), id_p in zip(validas, ids):
             vistos.add(id_p)
             maquina = self.maquinas.setdefault(id_p, MaquinaEstadosQueda(self.cfg))
-            tipo = maquina.atualizar(agora, medidas)
+            tipo = maquina.atualizar(agora, medidas, self._na_cama(medidas))
             if tipo:
                 alertas.append(EventoAlerta(id_p, tipo, agora, medidas.angulo_tronco))
             pessoas.append(EstadoPessoa(id_p, maquina.estado, maquina.ultimo_angulo, maquina.ultima_velocidade, pose))

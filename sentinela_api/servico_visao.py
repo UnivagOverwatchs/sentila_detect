@@ -45,6 +45,19 @@ def _desenhar_padrao(quadro, pessoas, fps):
     return desenhar(quadro, pessoas, fps)
 
 
+def desenhar_area_cama(quadro: np.ndarray, poligonos) -> np.ndarray:
+    """Sombreia a área da cama no vídeo (azul translúcido), para conferir se a marcação ficou certa."""
+    if not poligonos:
+        return quadro
+    altura, largura = quadro.shape[:2]
+    camada = quadro.copy()
+    for poli in poligonos:
+        pts = np.array([[int(x * largura), int(y * altura)] for x, y in poli], dtype=np.int32)
+        cv2.fillPoly(camada, [pts], (200, 120, 40))
+        cv2.polylines(quadro, [pts], True, (255, 170, 60), 2)
+    return cv2.addWeighted(camada, 0.25, quadro, 0.75, 0)
+
+
 def quadro_mensagem(texto: str) -> np.ndarray:
     """Quadro escuro com uma mensagem centralizada (câmera pausada/offline)."""
     tela = np.full((ALTURA, LARGURA, 3), (34, 23, 15), dtype=np.uint8)  # mesmo tom escuro da interface
@@ -78,6 +91,8 @@ class ServicoVisao:
         self.notificador = notificador or NotificadorAlertas()
 
         self.ativa = bool(camera.get("ativa", True))  # alterado pela tela de Configurações
+        self.area_cama = list(camera.get("area_cama") or [])  # polígonos 0..1; a tela de Configurações altera ao vivo
+        self._area_aplicada = None
         self._rodando = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -153,6 +168,10 @@ class ServicoVisao:
                     time.sleep(0.2)
                     continue
 
+                if self.area_cama != self._area_aplicada:  # a tela mudou a marcação da cama
+                    self._area_aplicada = list(self.area_cama)
+                    detector.definir_zonas_cama(self._area_aplicada)
+
                 poses = estimador.processar(quadro, agora)
                 pessoas, alertas = detector.processar(poses, agora)
 
@@ -161,6 +180,7 @@ class ServicoVisao:
                     fps = 0.9 * fps + 0.1 * (1.0 / dt)  # média móvel para o número não "pular"
 
                 tela = self._desenhar(quadro.copy(), pessoas, fps)
+                tela = desenhar_area_cama(tela, self.area_cama)
 
                 for evento in alertas:
                     caminho = self.notificador.notificar(evento, tela)
@@ -193,6 +213,7 @@ class ServicoRemoto:
         self.banco = banco
         self.cfg_queda = ConfigQueda()  # a sensibilidade vai para o banco; o detector remoto a lê ao reiniciar
         self.ativa = True
+        self.area_cama = []
         cameras = banco.listar_cameras()
         self.camera: Dict[str, Any] = cameras[0] if cameras else {"id": 0, "nome": "Câmera remota", "local": "", "ativa": True}
         self._jpeg = ServicoVisao._codificar(quadro_mensagem("Camera em outro computador"))

@@ -573,3 +573,36 @@ def test_notificador_remoto_fora_do_ar_nao_derruba():
         raise requests.ConnectionError("sem rede")
 
     NotificadorRemoto("http://zap:8100", "tok", enviar=falso_post)._post(5)  # só registra no log
+
+
+# --------------------------- área da cama ---------------------------
+
+def test_salvar_area_cama_persiste_e_vale_na_hora(ambiente):
+    banco, servico, cliente = ambiente
+    area = [[[0.3, 0.5], [0.8, 0.5], [0.8, 0.95], [0.3, 0.95]]]
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": area})
+    assert r.status_code == 200 and r.json()["area_cama"] == area
+    assert servico.area_cama == area                                   # efeito imediato no serviço de visão
+    assert cliente.get("/api/cameras").json()[0]["area_cama"] == area  # fica gravada no banco
+
+
+def test_limpar_area_cama(ambiente):
+    banco, servico, cliente = ambiente
+    cliente.put("/api/cameras/1/area-cama", json={"poligonos": [[[0.1, 0.1], [0.5, 0.1], [0.5, 0.5]]]})
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": []})
+    assert r.status_code == 200 and r.json()["area_cama"] == [] and servico.area_cama == []
+
+
+@pytest.mark.parametrize("poligonos", [
+    [[[0.1, 0.1], [0.5, 0.1]]],                      # só 2 pontos
+    [[[0.1, 0.1], [0.5, 0.1], [1.5, 0.5]]],           # fora da imagem
+    [[[0.1, 0.1], [0.5, 0.1], [0.5]]],                # ponto incompleto
+])
+def test_area_cama_invalida_e_recusada(ambiente, poligonos):
+    _, _, cliente = ambiente
+    assert cliente.put("/api/cameras/1/area-cama", json={"poligonos": poligonos}).status_code == 422
+
+
+def test_area_cama_de_camera_inexistente(ambiente):
+    _, _, cliente = ambiente
+    assert cliente.put("/api/cameras/99/area-cama", json={"poligonos": []}).status_code == 404

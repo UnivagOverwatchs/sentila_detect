@@ -10,6 +10,7 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/alertas/{id}/imagem foto do momento do alerta
     GET    /api/cameras             câmeras cadastradas
     PUT    /api/cameras/{id}        ligar/desligar, renomear
+    PUT    /api/cameras/{id}/area-cama  marcar onde fica a cama (deitar ali não gera alerta)
     GET    /api/configuracao        sensibilidade
     PUT    /api/configuracao
     GET    /api/contatos            contatos de emergência
@@ -30,7 +31,7 @@ fica aberto e o servidor escuta só em 127.0.0.1 por padrão; ver servidor.py --
 import asyncio
 import math
 import os
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -58,6 +59,14 @@ class AtualizarCamera(BaseModel):
     nome: Optional[str] = Field(default=None, max_length=80)
     local: Optional[str] = Field(default=None, max_length=60)
     ativa: Optional[bool] = None
+
+
+Ponto = Annotated[list[float], Field(min_length=2, max_length=2)]
+
+
+class AreaCama(BaseModel):
+    """Zonas de cama: até 4 polígonos de 3 a 12 pontos, com x e y entre 0 e 1 (fração da imagem)."""
+    poligonos: list[Annotated[list[Ponto], Field(min_length=3, max_length=12)]] = Field(default_factory=list, max_length=4)
 
 
 class Configuracao(BaseModel):
@@ -227,6 +236,18 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
             raise HTTPException(404, "Câmera não encontrada")
         if camera_id == servico.camera["id"]:
             servico.ativa = camera["ativa"]  # efeito imediato no serviço de visão
+        return camera
+
+    @app.put("/api/cameras/{camera_id}/area-cama")
+    def salvar_area_cama(camera_id: int, dados: AreaCama):
+        for poligono in dados.poligonos:
+            if any(not (0.0 <= v <= 1.0) for ponto in poligono for v in ponto):
+                raise HTTPException(422, "As coordenadas da cama devem ficar entre 0 e 1")
+        camera = banco.salvar_area_cama(camera_id, dados.poligonos) if banco.obter_camera(camera_id) else None
+        if camera is None:
+            raise HTTPException(404, "Câmera não encontrada")
+        if camera_id == servico.camera["id"]:
+            servico.area_cama = camera["area_cama"]  # vale já no próximo quadro
         return camera
 
     # ------------------------------------------------------------ configuração

@@ -199,3 +199,51 @@ def test_no_chao_sem_descida_nao_continua_sem_pose(detector):
     seq = repetir(pose_sintetica(320, 300, 90), 3) + [None] * (12 * FPS)
     alertas, _ = rodar(detector, seq)
     assert alertas == []
+
+
+# --------------------------- área da cama ---------------------------
+
+CAMA = [[(0.35, 0.55), (0.75, 0.55), (0.75, 0.95), (0.35, 0.95)]]  # fração da imagem 640x360
+
+
+def test_ponto_em_poligono():
+    from sentinela_pose.fall_detector import ponto_em_poligono
+    quadrado = [(0, 0), (10, 0), (10, 10), (0, 10)]
+    assert ponto_em_poligono((5, 5), quadrado)
+    assert not ponto_em_poligono((15, 5), quadrado)
+    assert not ponto_em_poligono((5, -1), quadrado)
+
+
+def test_deitar_devagar_na_cama_nao_alerta(detector):
+    detector.definir_zonas_cama(CAMA)
+    quadros = repetir(pose_sintetica(400, 250, 90), 40)  # deitada com o quadril dentro da cama, bem mais que o tempo de alerta
+    alertas, pessoas = rodar(detector, quadros)
+    assert alertas == []
+    assert pessoas[0].estado == Estado.NORMAL
+
+
+def test_queda_brusca_dentro_da_cama_nao_alerta(detector):
+    detector.definir_zonas_cama(CAMA)
+    alertas, _ = rodar(detector, repetir(pose_sintetica(400, 180, 0), 3) + cair(x=400, y_ini=200, y_fim=250)
+                       + repetir(pose_sintetica(400, 250, 90), 10))
+    assert alertas == []
+
+
+def test_deitado_no_chao_fora_da_cama_continua_alertando(detector):
+    detector.definir_zonas_cama(CAMA)  # a pessoa está à esquerda da cama (x=100)
+    alertas, _ = rodar(detector, repetir(pose_sintetica(100, 250, 0), 3) + cair(x=100, y_ini=200, y_fim=300)
+                       + repetir(pose_sintetica(100, 300, 90), 10))
+    assert [a.tipo for a in alertas] == ["queda"]
+
+
+def test_sem_zona_de_cama_nada_muda(detector):
+    alertas, _ = rodar(detector, repetir(pose_sintetica(400, 250, 90), 40))
+    assert [a.tipo for a in alertas] == ["pessoa_no_chao"]
+
+
+def test_levantar_da_cama_e_deitar_no_chao_alerta(detector):
+    detector.definir_zonas_cama(CAMA)
+    quadros = (repetir(pose_sintetica(400, 250, 90), 10)      # deitada na cama
+               + repetir(pose_sintetica(100, 300, 90), 40))   # agora deitada no chão, fora da cama
+    alertas, _ = rodar(detector, quadros)
+    assert alertas, "deitar no chão fora da cama deve alertar"
