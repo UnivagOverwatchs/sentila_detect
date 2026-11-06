@@ -58,22 +58,34 @@ class EventoAlerta:
 # 1) GEOMETRIA
 # ---------------------------------------------------------------------------
 
-def _media_pontos(pontos: np.ndarray, idx_a: int, idx_b: int, vis_min: float) -> Optional[np.ndarray]:
-    """Média de dois pontos (ex.: ombro esq. e dir.). Usa só os que estiverem visíveis."""
-    visiveis = [pontos[i, :2] for i in (idx_a, idx_b) if pontos[i, 2] >= vis_min]
+def _dentro(ponto: np.ndarray, limites: Optional[Tuple[int, int]]) -> bool:
+    """True se o ponto está dentro da imagem. O MediaPipe 'chuta' pontos fora do quadro (ex.: quadril cortado)."""
+    if limites is None:
+        return True
+    largura, altura = limites
+    return 0 <= ponto[0] < largura and 0 <= ponto[1] < altura
+
+
+def _media_pontos(pontos: np.ndarray, idx_a: int, idx_b: int, vis_min: float,
+                  limites: Optional[Tuple[int, int]] = None) -> Optional[np.ndarray]:
+    """Média de dois pontos (ex.: ombro esq. e dir.). Usa só os visíveis E dentro da imagem."""
+    visiveis = [pontos[i, :2] for i in (idx_a, idx_b)
+                if pontos[i, 2] >= vis_min and _dentro(pontos[i], limites)]
     if not visiveis:
         return None
     return np.mean(visiveis, axis=0)
 
 
-def extrair_medidas(pose: Pose, vis_min: float = 0.3) -> Optional[Medidas]:
+def extrair_medidas(pose: Pose, vis_min: float = 0.3,
+                    limites: Optional[Tuple[int, int]] = None) -> Optional[Medidas]:
     """
     Calcula as medidas que a máquina de estados usa.
-    Retorna None se ombros ou quadris não estiverem visíveis (pose inutilizável).
+    vis_min: visibilidade mínima dos ombros/quadris; limites: (largura, altura) da imagem.
+    Retorna None se ombros ou quadris não estiverem visíveis dentro da imagem (pose inutilizável).
     """
     p = pose.pontos
-    ombro = _media_pontos(p, OMBRO_E, OMBRO_D, vis_min)
-    quadril = _media_pontos(p, QUADRIL_E, QUADRIL_D, vis_min)
+    ombro = _media_pontos(p, OMBRO_E, OMBRO_D, vis_min, limites)
+    quadril = _media_pontos(p, QUADRIL_E, QUADRIL_D, vis_min, limites)
     if ombro is None or quadril is None:
         return None
 
@@ -159,6 +171,8 @@ class MaquinaEstadosQueda:
     estado: Estado = Estado.NORMAL
     # Histórico curto (timestamp, y_quadril, tamanho_tronco) para medir a velocidade de descida.
     _historico: Deque[Tuple[float, float, float]] = field(default_factory=lambda: deque(maxlen=60))
+    _angulos: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=30))
+    _primeira_observacao: Optional[float] = None
     _ultimo_impacto: float = -1e9      # instante da última descida brusca
     _inicio_deitado: Optional[float] = None
     _inicio_em_pe: Optional[float] = None
@@ -197,21 +211,31 @@ class MaquinaEstadosQueda:
         cfg = self.cfg
 
         if medidas is not None:
+            if self._primeira_observacao is None:
+                self._primeira_observacao = agora
             self._ultima_observacao = agora
             self._historico.append((agora, medidas.quadril[1], medidas.tamanho_tronco))
-            self.ultimo_angulo = medidas.angulo_tronco
+            self._angulos.append((agora, medidas.angulo_tronco))
+            # Mediana do ângulo na janela curta: um quadro "tremido" não muda a postura.
+            recentes = [a for t, a in self._angulos if agora - t <= cfg.janela_suavizacao]
+            self.ultimo_angulo = float(np.median(recentes))
             self.ultima_velocidade = self._velocidade_descida(agora)
 
             # (a) Descida brusca do quadril = possível impacto.
             if self.ultima_velocidade >= cfg.velocidade_queda:
                 self._ultimo_impacto = agora
 
-            deitado = medidas.angulo_tronco >= cfg.angulo_deitado
-            em_pe = medidas.angulo_tronco <= cfg.angulo_em_pe
+            # Pessoa recém-aparecida: só observa. IDs que "piscam" por 1-2 quadros nunca geram alerta.
+            if agora - self._primeira_observacao < cfg.idade_minima_track:
+                return None
+
+            deitado = self.ultimo_angulo >= cfg.angulo_deitado
+            em_pe = self.ultimo_angulo <= cfg.angulo_em_pe
         else:
-            # Sem pose: mantém a última postura conhecida enquanto estiver dentro da tolerância.
-            # Isso é importante porque o modelo às vezes perde a pessoa justamente quando ela está no chão.
-            deitado = self.estado != Estado.NORMAL
+            # Sem pose: só mantém a contagem se já VIMOS a queda (impacto). O modelo às vezes perde
+            # a pessoa justamente quando ela está no chão. "No chão" sem impacto não continua às cegas:
+            # era isso que gerava alerta de pessoas "fantasmas".
+            deitado = self.estado in (Estado.CAINDO, Estado.ALERTA)
             em_pe = False
 
         # (b) Postura deitada: inicia/continua a contagem de tempo no chão.
@@ -286,13 +310,19 @@ class DetectorQueda:
                  cfg_queda: ConfigQueda | None = None, cfg_pose: ConfigPose | None = None):
         self.cfg = cfg_queda or ConfigQueda()
         self.vis_min = (cfg_pose or ConfigPose()).visibilidade_min
+        self.limites = (largura, altura)
         diagonal = math.hypot(largura, altura)
         self.rastreador = RastreadorSimples(self.cfg.distancia_max_rastreio * diagonal)
         self.maquinas: Dict[int, MaquinaEstadosQueda] = {}
 
     def processar(self, poses: List[Pose], agora: float) -> Tuple[List[EstadoPessoa], List[EventoAlerta]]:
-        # 1. Extrai medidas e descarta poses sem ombro/quadril visíveis.
-        validas = [(p, m) for p in poses if (m := extrair_medidas(p, self.vis_min)) is not None]
+        # 1. Extrai medidas e descarta poses inválidas: tronco fora da imagem/pouco visível,
+        #    quadril acima dos ombros (erro do modelo) ou pessoa pequena demais.
+        vis_tronco = max(self.vis_min, self.cfg.visibilidade_tronco)
+        validas = [(p, m) for p in poses
+                   if (m := extrair_medidas(p, vis_tronco, self.limites)) is not None
+                   and m.angulo_tronco <= self.cfg.angulo_max_valido
+                   and m.tamanho_tronco >= self.cfg.tronco_min_px]
         ids = self.rastreador.associar([m for _, m in validas])
 
         pessoas: List[EstadoPessoa] = []

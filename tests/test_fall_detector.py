@@ -142,3 +142,36 @@ def test_duas_pessoas_ids_independentes(detector):
         alertas += novos
     assert len(alertas) == 1
     assert alertas[0].tipo == "queda"
+
+
+# --------------------- falsos alarmes reais (pessoa sentada perto da câmera) ---------------------
+
+def test_quadril_fora_da_imagem_e_descartado():
+    # Sentada perto da câmera: o MediaPipe "chuta" o quadril abaixo da borda (y > 360).
+    pose = pose_sintetica(320, 420, 0)
+    assert extrair_medidas(pose, limites=(640, 360)) is None
+
+
+def test_quadril_acima_dos_ombros_nao_alerta(detector):
+    # Ângulo de 170° (quadril acima dos ombros) é erro do modelo, não queda.
+    alertas, _ = rodar(detector, repetir(pose_sintetica(320, 150, 170), 12))
+    assert alertas == []
+
+
+def test_id_que_pisca_nao_gera_alerta(detector):
+    # Pose "chutada" que salta pela imagem: cada posição dura 10 quadros e só volta ~5 s depois,
+    # longe do raio do rastreador. Nenhum ID fica tempo suficiente deitado para alertar.
+    grade = [(x, y) for y in (60, 200, 340) for x in (40, 180, 320, 460, 600)]
+    alertas = []
+    for i in range(12 * FPS):
+        x, y = grade[(i // 10) % len(grade)]
+        _, novos = detector.processar([pose_sintetica(x, y, 90)], i / FPS)
+        alertas += novos
+    assert alertas == []
+
+
+def test_no_chao_sem_impacto_nao_continua_sem_pose(detector):
+    # Deitou devagar e depois sumiu da imagem: sem ter visto queda, não alerta às cegas.
+    seq = repetir(pose_sintetica(320, 180, 0), 1) + cair(4.0) + [None] * (12 * FPS)
+    alertas, _ = rodar(detector, seq)
+    assert alertas == []

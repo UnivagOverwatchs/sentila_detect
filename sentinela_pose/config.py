@@ -83,5 +83,16 @@ class ConfigQueda:
     tolerancia_falha: float = field(default_factory=lambda: _env_float("QUEDA_TOLERANCIA_FALHA", 1.0))
     # Após esse tempo sem ver a pessoa, o rastro dela é descartado.
     tempo_perda_max: float = field(default_factory=lambda: _env_float("QUEDA_TEMPO_PERDA_MAX", 10.0))
+    # --- Filtros contra pose "chutada" (pessoa cortada pela borda, sentada perto da câmera) ---
+    # Visibilidade mínima dos ombros/quadris para a pose valer (mais exigente que os outros pontos).
+    visibilidade_tronco: float = field(default_factory=lambda: _env_float("QUEDA_VIS_TRONCO", 0.6))
+    # Ângulo acima disso = quadril acima dos ombros: quase sempre erro do modelo, a pose é descartada.
+    angulo_max_valido: float = field(default_factory=lambda: _env_float("QUEDA_ANGULO_MAX_VALIDO", 135.0))
+    # Tronco menor que isso (pixels) = pessoa muito distante/ruído: descartada.
+    tronco_min_px: float = field(default_factory=lambda: _env_float("QUEDA_TRONCO_MIN_PX", 20.0))
+    # Pessoa precisa ser vista por esse tempo antes de poder gerar alerta (elimina IDs que piscam).
+    idade_minima_track: float = field(default_factory=lambda: _env_float("QUEDA_IDADE_MIN_TRACK", 1.0))
+    # Janela da mediana do ângulo do tronco (suaviza tremidas de 1 quadro).
+    janela_suavizacao: float = field(default_factory=lambda: _env_float("QUEDA_JANELA_SUAVIZACAO", 0.3))
     # Distância máxima (fração da diagonal da imagem) para associar a mesma pessoa entre quadros.
     distancia_max_rastreio: float = field(default_factory=lambda: _env_float("QUEDA_DIST_MAX_RASTREIO", 0.15))
