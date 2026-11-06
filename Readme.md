@@ -88,7 +88,7 @@ DetectHumans/
 ├── tests/                   # testes automáticos (pytest)
 ├── requirements_pose.txt    # dependências Python desta versão
 ├── .env.exemplo_pose        # modelo de configuração
-└── (arquivos da abordagem anterior: alerta_zap*.py, dataset*/, runs/, yolov8n.pt ...)
+└── (arquivos da abordagem anterior: dataset*/, runs/, yolov8n.pt ...; os scripts alerta*.py foram removidos)
 ```
 
 ---
@@ -161,6 +161,11 @@ CAMERA_LOCAL=1º andar
 # Banco PostgreSQL (sem isto, usa o arquivo local sentinela.db)
 DATABASE_URL=postgresql://usuario:senha@servidor:5432/nome_do_banco
 # ou: PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD / PGSSLMODE
+
+# Web Push (gere com: python -m sentinela_api.push --gerar-chaves)
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_CONTATO=mailto:admin@exemplo.com
 
 # WhatsApp (API local já usada pelo projeto)
 WHATSAPP_URL=http://localhost:3000/client/sendMessage/ABCD
@@ -235,13 +240,13 @@ Os testes sempre usam um SQLite temporário, nunca o banco do servidor.
 - **Corpo inteiro:** ombros e quadril precisam aparecer; pessoa cortada pela borda é ignorada de propósito.
 - **Cama x chão:** a câmera não diferencia; deitar na cama devagar pode gerar alerta de queda. Próximo passo: marcar a área da cama na imagem.
 - **Sem login ainda:** use `--host 0.0.0.0` só em rede interna confiável.
-- **Notificação com o app fechado** depende de Web Push (próxima etapa).
+- **Notificação com o app fechado:** Web Push (VAPID) implementado; exige HTTPS no celular. Gere as chaves com `python -m sentinela_api.push --gerar-chaves` e ative em *Configurações → Ativar notificações*.
 - **Uma câmera por servidor** nesta versão.
 
 ## Próximas etapas
 
 - [ ] Login JWT e perfis Cuidador/Gestor
-- [ ] Web Push (alerta com o app fechado)
+- [x] Web Push (alerta com o app fechado) — falta testar em celular com HTTPS
 - [ ] Várias câmeras no mesmo servidor
 - [ ] Área da cama (zona onde deitar é normal)
 - [ ] Residentes vinculados às câmeras/eventos
@@ -454,8 +459,9 @@ runs/segment/train3/weights/
 
 ```
 DetectHumans/
-├── alerta.py                    #  Script sem api whatsapp
-├── alerta_zap.py                #  Script de monitoramento principal S2
+├── servidor.py                  #  Servidor atual: visão por pose + API + PWA
+├── sentinela_api/  sentinela_pose/  web/   #  API, detector de queda e interface
+├── docker-compose.yml           #  PostgreSQL local para desenvolvimento
 ├── train.py                     #  Script de treinamento YOLO
 ├── listar_cameras.py            #  Utilitário para listar câmeras da maquina
 ├── teste_webcam.py              #  Teste de webcam
@@ -513,7 +519,7 @@ O treinamento levará entre 1 a 2 dias para treinar e salvará os pesos em `runs
 #### 3. Executar o Sistema de Detecção
 
 ```bash
-python alerta_zap.py
+python servidor.py   # fluxo atual (pose + API + PWA); veja a seção do Sentinela acima
 ```
 
 **Ao iniciar:**
@@ -530,7 +536,7 @@ python alerta_zap.py
 
 ### 🔧 Configurações Importantes
 
-Arquivo `alerta_zap.py` - Constantes ajustáveis:
+Fluxo antigo (YOLO), histórico: constantes que existiam no `alerta_zap.py` (removido). A configuração atual está no `.env.exemplo_pose`:
 
 ```python
 # Qualidade da câmera

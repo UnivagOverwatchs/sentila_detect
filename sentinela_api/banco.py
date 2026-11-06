@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS contato_emergencia (
     telefone  VARCHAR(20)  NOT NULL,
     tipo      VARCHAR(30)
 );
+CREATE TABLE IF NOT EXISTS assinatura_push (
+    id         {pk},
+    endpoint   TEXT NOT NULL UNIQUE,
+    p256dh     VARCHAR(255) NOT NULL,
+    auth       VARCHAR(255) NOT NULL,
+    criada_em  TIMESTAMP NOT NULL
+);
 CREATE TABLE IF NOT EXISTS configuracao (
     id             INTEGER PRIMARY KEY CHECK (id = 1),
     sensibilidade  NUMERIC(3,2) NOT NULL DEFAULT 0.65,
@@ -311,3 +318,17 @@ class Banco:
     def salvar_sensibilidade(self, valor: float) -> None:
         self._executar("UPDATE configuracao SET sensibilidade = ?, atualizado_em = ? WHERE id = 1",
                        (round(valor, 2), _agora()))
+
+    # ------------------------------------------------------------ Web Push
+    def salvar_assinatura(self, endpoint: str, p256dh: str, auth: str) -> None:
+        """Guarda (ou atualiza) a assinatura push de um aparelho."""
+        self._executar(
+            "INSERT INTO assinatura_push (endpoint, p256dh, auth, criada_em) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth",
+            (endpoint, p256dh, auth, _agora()))
+
+    def remover_assinatura(self, endpoint: str) -> None:
+        self._executar("DELETE FROM assinatura_push WHERE endpoint = ?", (endpoint,))
+
+    def listar_assinaturas(self) -> List[Dict[str, Any]]:
+        return self._consultar("SELECT endpoint, p256dh, auth FROM assinatura_push ORDER BY id")

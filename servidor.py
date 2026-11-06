@@ -28,6 +28,7 @@ load_dotenv()
 
 from sentinela_api.app import criar_app  # noqa: E402
 from sentinela_api.banco import Banco  # noqa: E402
+from sentinela_api.push import ServicoPush  # noqa: E402
 from sentinela_api.servico_visao import ServicoVisao  # noqa: E402
 
 PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
@@ -78,14 +79,18 @@ def main() -> None:
     banco = Banco(args.banco)  # PostgreSQL se o .env tiver DATABASE_URL/PGHOST; senão SQLite local
     print(f"[Sentinela] Banco de dados: {banco.descricao}")
     camera = banco.garantir_camera(args.camera, args.local, args.fonte)
-    servico = ServicoVisao(banco, camera, args.fonte)
+    push = ServicoPush(banco)
+    if not push.configurado:
+        print("[Sentinela] Push desativado: defina VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env "
+              "(python -m sentinela_api.push --gerar-chaves).")
+    servico = ServicoVisao(banco, camera, args.fonte, servico_push=push)
     servico.iniciar()
 
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):
         print("[Sentinela] Interface não compilada. Rode:  cd web && npm install && npm run build")
 
     print(f"[Sentinela] Abra http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.porta}")
-    config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB), host=args.host, port=args.porta,
+    config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB, push), host=args.host, port=args.porta,
                             log_level="warning", timeout_graceful_shutdown=2)
     try:
         ServidorUvicorn(config, servico).run()

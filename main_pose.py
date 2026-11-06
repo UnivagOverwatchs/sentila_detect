@@ -60,7 +60,7 @@ class CapturaVideo:
             self.cap = cv2.VideoCapture(int(fonte), backend)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, LARGURA)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ALTURA)
-            # Força o formato MJPG (igual ao alerta_zap_ajuste_frames.py). Sem isso, pelo DirectShow
+            # Força o formato MJPG (como no fluxo antigo). Sem isso, pelo DirectShow
             # algumas webcams entregam YUY2 convertido errado -> imagem quase sem cor.
             self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         else:

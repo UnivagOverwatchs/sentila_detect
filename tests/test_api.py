@@ -167,3 +167,42 @@ def test_websocket_envia_status_e_alerta_novo(ambiente):
 @pytest.mark.parametrize("s,angulo", [(0.0, 70.0), (1.0, 50.0)])
 def test_mapeamento_sensibilidade(s, angulo):
     assert aplicar_sensibilidade(ConfigQueda(), s).angulo_deitado == pytest.approx(angulo)
+
+
+# ------------------------------------------------------------------ Web Push
+def test_assinatura_push_e_envio_ao_registrar_alerta(ambiente):
+    from sentinela_api.push import ServicoPush, gerar_chaves
+
+    banco, servico, cliente = ambiente
+    chaves = gerar_chaves()
+    enviados = []
+    push = ServicoPush(banco, chaves["VAPID_PUBLIC_KEY"], chaves["VAPID_PRIVATE_KEY"],
+                       enviar_fn=lambda **kw: enviados.append(kw))
+
+    app_push = TestClient(criar_app(banco, servico, None, push))
+    assert app_push.get("/api/push/chave").json() == {"chave": chaves["VAPID_PUBLIC_KEY"]}
+
+    corpo = {"endpoint": "https://push.exemplo/abc123", "keys": {"p256dh": "chave", "auth": "segredo"}}
+    assert app_push.post("/api/push/assinaturas", json=corpo).status_code == 204
+    assert app_push.post("/api/push/assinaturas", json=corpo).status_code == 204  # repetir não duplica
+    assert len(banco.listar_assinaturas()) == 1
+
+    alerta = banco.registrar_alerta(1, 1, "queda", 0.9, None)
+    push._enviar_para_todos(alerta)
+    assert len(enviados) == 1 and "Queda detectada" in enviados[0]["data"]
+
+    assert app_push.request("DELETE", "/api/push/assinaturas", json={"endpoint": corpo["endpoint"]}).status_code == 204
+    assert banco.listar_assinaturas() == []
+
+
+def test_push_sem_chaves_responde_503(ambiente):
+    _, _, cliente = ambiente
+    assert cliente.get("/api/push/chave").status_code == 503
+
+
+def test_assinatura_exige_https(ambiente):
+    banco, servico, _ = ambiente
+    from sentinela_api.push import ServicoPush
+    app_push = TestClient(criar_app(banco, servico, None, ServicoPush(banco, "a", "b")))
+    ruim = {"endpoint": "http://inseguro.exemplo/x", "keys": {"p256dh": "k", "auth": "a"}}
+    assert app_push.post("/api/push/assinaturas", json=ruim).status_code == 422

@@ -49,6 +49,10 @@ export const api = {
     requisitar("/contatos", { method: "POST", body: JSON.stringify(contato) }),
   removerContato: (id) => requisitar(`/contatos/${id}`, { method: "DELETE" }),
 
+  chavePush: () => requisitar("/push/chave"),
+  salvarAssinaturaPush: (assinatura) =>
+    requisitar("/push/assinaturas", { method: "POST", body: JSON.stringify(assinatura) }),
+
   urlQuadro: () => `${BASE}/quadro`,
   urlWebSocket: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/ws`,
 };

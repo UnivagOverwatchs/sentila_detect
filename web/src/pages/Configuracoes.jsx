@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { IconeFechar, IconeMais, IconeSino, IconeTelefone } from "../components/Icones.jsx";
 import { pedirPermissaoNotificacao } from "../services/aviso.js";
+import { ativarPush, pushDisponivel } from "../services/push.js";
 
 function rotuloNivel(valor) {
   const pct = Math.round(valor * 100);
@@ -29,6 +30,7 @@ export function Configuracoes({
   const [novo, setNovo] = useState({ nome: "", telefone: "", tipo: "Familiar" });
   const [formAberto, setFormAberto] = useState(false);
   const [erroContato, setErroContato] = useState("");
+  const [pushEstado, setPushEstado] = useState("");
   const [permissao, setPermissao] = useState("Notification" in window ? Notification.permission : "indisponivel");
 
   useEffect(() => {
@@ -165,13 +167,20 @@ export function Configuracoes({
           />
           <button
             className="botao botao--fantasma"
-            disabled={permissao === "granted" || permissao === "indisponivel"}
-            onClick={async () => setPermissao(await pedirPermissaoNotificacao())}
+            disabled={permissao === "indisponivel"}
+            onClick={async () => {
+              setPermissao(await pedirPermissaoNotificacao());
+              if (pushDisponivel()) setPushEstado(await ativarPush());
+            }}
           >
             <IconeSino tamanho={14} />
             {permissao === "granted" ? "Notificações ativas" : "Ativar notificações"}
           </button>
         </div>
+        {pushEstado === "erro" && (
+          <p className="erro">Não foi possível ativar o aviso com o app fechado (precisa de HTTPS e do push configurado no servidor).</p>
+        )}
+        {pushEstado === "ativo" && <p className="dica">Pronto: este aparelho também recebe alertas com o app fechado.</p>}
       </section>
     </div>
   );

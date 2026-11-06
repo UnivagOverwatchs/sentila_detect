@@ -1,7 +1,7 @@
 """
 alertas.py - Envio de alertas quando o detector confirma uma queda.
 
-Mantém o mesmo contrato do script antigo (alerta_zap_ajuste_frames.py):
+Mantém o mesmo contrato do script antigo do fluxo YOLO (já removido):
 POST para a API local de WhatsApp com a foto do momento em Base64.
 Diferenças:
   - URL e chatId vêm do .env (não ficam fixos no código: número de telefone é dado pessoal/LGPD).

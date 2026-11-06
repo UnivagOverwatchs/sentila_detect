@@ -4,8 +4,7 @@
  *   2. vibração no celular;
  *   3. notificação do sistema (aparece mesmo com a aba em segundo plano).
  *
- * Limitação atual: com o app totalmente FECHADO só o Web Push (VAPID) avisa;
- * isso entra junto com a API Node.js prevista na documentação (/push/assinaturas).
+ * Com o app totalmente FECHADO quem avisa é o Web Push (services/push.js + public/push-sw.js).
  */
 
 let contextoAudio = null;
