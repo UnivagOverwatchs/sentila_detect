@@ -1,4 +1,4 @@
-# Sobe só o PostgreSQL do Sentinela. As credenciais vêm do .env (POSTGRES_*).
+# Sobe só o PostgreSQL do Sentinela. As credenciais vêm do .env (PGDATABASE, PGUSER, PGPASSWORD, PGPORT).
 #   docker compose up -d
 services:
   postgres:
@@ -6,15 +6,15 @@ services:
     container_name: sentinela-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${PGDATABASE}
+      POSTGRES_USER: ${PGUSER}
+      POSTGRES_PASSWORD: ${PGPASSWORD}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${PGPORT:-5432}:5432"
     volumes:
       - sentinela_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
       interval: 5s
       timeout: 3s
       retries: 10

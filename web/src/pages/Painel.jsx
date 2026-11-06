@@ -5,7 +5,7 @@
  *   - Alertas recentes com ação rápida "Resolver".
  */
 import { useState } from "react";
-import { api } from "../services/api.js";
+import { VideoAoVivo } from "../components/VideoAoVivo.jsx";
 import { dia, hora, TITULO_TIPO } from "../services/formato.js";
 import { IconeAtividade, IconeCamera, IconeCheck, IconePessoas, IconeSino } from "../components/Icones.jsx";
 
@@ -22,7 +22,7 @@ function Indicador({ rotulo, valor, Icone, destaque }) {
 }
 
 export function Painel({ status, conectado, camera, alertas, aoTratar }) {
-  const [erroVideo, setErroVideo] = useState(false);
+  const [videoDisponivel, setVideoDisponivel] = useState(true);
   const recentes = alertas.slice(0, 6);
   const online = conectado && status?.camera_online;
   const pausada = status && !status.camera_ativa;
@@ -31,18 +31,13 @@ export function Painel({ status, conectado, camera, alertas, aoTratar }) {
     <div className="grade-painel">
       <section className="cartao cartao--video">
         <div className="video">
-          {conectado && !erroVideo ? (
-            // MJPEG: o navegador atualiza a imagem sozinho a cada quadro recebido.
-            <img src={api.urlVideo()} alt={`Câmera ao vivo - ${camera?.nome ?? ""}`} onError={() => setErroVideo(true)} />
-          ) : (
+          {conectado && (
+            <VideoAoVivo alt={`Câmera ao vivo - ${camera?.nome ?? ""}`} aoMudarDisponibilidade={setVideoDisponivel} />
+          )}
+          {(!conectado || !videoDisponivel) && (
             <div className="video__vazio">
               <IconeCamera tamanho={32} />
-              <span>{conectado ? "Vídeo indisponível" : "Conectando ao serviço de visão..."}</span>
-              {erroVideo && (
-                <button className="botao botao--pequeno" onClick={() => setErroVideo(false)}>
-                  Tentar de novo
-                </button>
-              )}
+              <span>{conectado ? "Vídeo indisponível, tentando de novo..." : "Conectando ao serviço de visão..."}</span>
             </div>
           )}
           <span className={`video__selo ${online && !pausada ? "video__selo--vivo" : ""}`}>

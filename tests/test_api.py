@@ -11,13 +11,10 @@ Rodar:  python -m pytest tests -v
 
 import math
 import time
-import uuid
 
 import numpy as np
 import pytest
-from dotenv import load_dotenv
 
-load_dotenv()  # lê POSTGRES_* do .env
 fastapi = pytest.importorskip("fastapi")  # pula se a API não estiver instalada
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -67,12 +64,7 @@ class EstimadorFalso:
 
 @pytest.fixture
 def ambiente(tmp_path):
-    schema = f"teste_{uuid.uuid4().hex[:8]}"
-    try:
-        banco = Banco(schema=schema)
-        banco.criar_tabelas()
-    except Exception as erro:  # PostgreSQL fora do ar ou sem permissão
-        pytest.skip(f"PostgreSQL indisponível: {erro}")
+    banco = Banco(str(tmp_path / "teste.db"), usar_postgres=False)  # testes nunca tocam o banco do servidor
     camera = banco.garantir_camera("Quarto teste", "Térreo", "fake")
     servico = ServicoVisao(banco, camera, "fake", cfg_queda=ConfigQueda(),
                            criar_captura=CapturaFalsa, criar_estimador=EstimadorFalso,
@@ -81,9 +73,6 @@ def ambiente(tmp_path):
     cliente = TestClient(criar_app(banco, servico))
     yield banco, servico, cliente
     servico.parar()
-    with banco._pool.connection() as con:  # remove o schema temporário do teste
-        con.execute(f"DROP SCHEMA {schema} CASCADE")
-    banco.fechar()
 
 
 def esperar_alerta(cliente, timeout=8.0):
@@ -105,6 +94,15 @@ def test_queda_simulada_vira_alerta_pendente_com_imagem(ambiente):
     assert alertas[0]["status"] == "PENDENTE"
     assert cliente.get(f"/api/alertas/{alertas[0]['id']}/imagem").status_code == 200
     assert cliente.get("/api/status").json()["pendentes"] == 1
+
+
+def test_quadro_atual_e_jpeg_sem_cache(ambiente):
+    _, _, cliente = ambiente
+    r = cliente.get("/api/quadro")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert r.headers["cache-control"] == "no-store"
+    assert r.content[:2] == b"\xff\xd8"  # assinatura de arquivo JPEG
 
 
 def test_tratar_alerta_registra_quem_e_quando(ambiente):

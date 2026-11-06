@@ -153,7 +153,13 @@ export default function App() {
         nomeCuidador={nomeCuidador}
       >
         {pagina === "painel" && (
-          <Painel status={status} conectado={conectado} camera={cameras[0]} alertas={alertas} aoTratar={tratarAlerta} />
+          <Painel
+            status={status}
+            conectado={conectado}
+            camera={cameras.find((c) => c.id === status?.camera_id)}
+            alertas={alertas}
+            aoTratar={tratarAlerta}
+          />
         )}
         {pagina === "historico" && <Historico alertas={alertas} aoTratar={tratarAlerta} offline={offline} />}
         {pagina === "config" && (

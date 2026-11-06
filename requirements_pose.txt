@@ -11,10 +11,7 @@ pytest>=8.0
 fastapi>=0.110
 uvicorn[standard]>=0.29
 httpx>=0.27
-
-# Banco PostgreSQL
+# PostgreSQL (opcional: só quando o .env tiver DATABASE_URL ou PGHOST)
 psycopg[binary]>=3.1
-psycopg-pool>=3.2
-
-# Web Push (notificação com o app fechado)
+# Web Push (aviso no celular com o app fechado)
 pywebpush>=2.0

@@ -10,6 +10,7 @@ Interpolação linear entre um perfil "menos alertas" (s=0) e "mais alertas" (s=
     velocidade_queda           1.8           0.8    -> aceita descida mais lenta
     tempo_confirma_queda (s)   3.5           1.0    -> confirma mais rápido
     tempo_no_chao (s)          15            5
+    desnivel_queda_lenta       1.0           0.5    -> aceita descida menor até o chão
 
 Com s=0.65 (padrão "Alta (65%)" do protótipo) o resultado fica perto dos
 valores padrão de config.py, que já foram validados nos testes.
@@ -23,6 +24,7 @@ _FAIXAS = {
     "velocidade_queda": (1.8, 0.8),
     "tempo_confirma_queda": (3.5, 1.0),
     "tempo_no_chao": (15.0, 5.0),
+    "desnivel_queda_lenta": (1.0, 0.5),
 }
 
 

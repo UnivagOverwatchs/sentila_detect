@@ -53,6 +53,6 @@ export const api = {
   salvarAssinaturaPush: (assinatura) =>
     requisitar("/push/assinaturas", { method: "POST", body: JSON.stringify(assinatura) }),
 
-  urlVideo: () => `${BASE}/video`,
+  urlQuadro: () => `${BASE}/quadro`,
   urlWebSocket: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/ws`,
 };

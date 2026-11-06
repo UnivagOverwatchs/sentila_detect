@@ -12,8 +12,9 @@ Fluxo por quadro:
 
 Estados:
     NORMAL   : pessoa em pé, sentada ou andando.
-    CAINDO   : postura deitada iniciada logo após uma descida brusca (impacto).
-    NO_CHAO  : postura deitada sem impacto visto (pode ser queda lenta ou deitar).
+    CAINDO   : postura deitada depois de uma DESCIDA vista: brusca (impacto) ou lenta
+               (quadril desceu aos poucos até o chão). Confirma em poucos segundos.
+    NO_CHAO  : postura deitada sem descida vista (ex.: já entrou na imagem deitada).
     ALERTA   : tempo de confirmação estourou -> alerta disparado (uma vez por episódio).
 """
 
@@ -170,7 +171,7 @@ class MaquinaEstadosQueda:
     cfg: ConfigQueda
     estado: Estado = Estado.NORMAL
     # Histórico curto (timestamp, y_quadril, tamanho_tronco) para medir a velocidade de descida.
-    _historico: Deque[Tuple[float, float, float]] = field(default_factory=lambda: deque(maxlen=60))
+    _historico: Deque[Tuple[float, float, float]] = field(default_factory=lambda: deque(maxlen=300))
     _angulos: Deque[Tuple[float, float]] = field(default_factory=lambda: deque(maxlen=30))
     _primeira_observacao: Optional[float] = None
     _ultimo_impacto: float = -1e9      # instante da última descida brusca
@@ -201,6 +202,19 @@ class MaquinaEstadosQueda:
             return 0.0
         # Usa o tronco do início da janela (antes da queda o tronco aparece inteiro, medida mais confiável).
         return (y1 - y0) / max(tronco0, 1.0) / dt
+
+    def _desceu_devagar(self, agora: float) -> bool:
+        """
+        Queda lenta: o quadril está agora pelo menos `desnivel_queda_lenta` troncos abaixo
+        do ponto mais alto em que esteve na janela (ex.: 5 s), sem exigir velocidade.
+        A escala é o MAIOR tronco da janela (tronco em pé = medida mais confiável).
+        """
+        janela = [(y, tronco) for ts, y, tronco in self._historico if agora - ts <= self.cfg.janela_queda_lenta]
+        if len(janela) < 2:
+            return False
+        y_mais_alto = min(y for y, _ in janela)          # y cresce para baixo
+        escala = max(tronco for _, tronco in janela)
+        return (janela[-1][0] - y_mais_alto) / max(escala, 1.0) >= self.cfg.desnivel_queda_lenta
 
     def atualizar(self, agora: float, medidas: Optional[Medidas]) -> Optional[str]:
         """
@@ -242,12 +256,14 @@ class MaquinaEstadosQueda:
         if deitado:
             self._ultima_deitado = agora if medidas is not None else self._ultima_deitado
             self._inicio_em_pe = None
+            # Houve descida vista? Brusca (impacto recente) ou lenta (desnível na janela).
+            # Checado também enquanto NO_CHAO: o quadril pode terminar de "assentar" depois de deitar.
+            houve_descida = ((agora - self._ultimo_impacto) <= cfg.janela_impacto
+                             or (medidas is not None and self._desceu_devagar(agora)))
             if self._inicio_deitado is None:
                 self._inicio_deitado = agora
-                houve_impacto = (agora - self._ultimo_impacto) <= cfg.janela_impacto
-                self.estado = Estado.CAINDO if houve_impacto else Estado.NO_CHAO
-            elif self.estado == Estado.NO_CHAO and (agora - self._ultimo_impacto) <= cfg.janela_impacto:
-                # Impacto detectado logo depois de deitar (ex.: deitou de lado e o quadril "despencou").
+                self.estado = Estado.CAINDO if houve_descida else Estado.NO_CHAO
+            elif self.estado == Estado.NO_CHAO and houve_descida:
                 self.estado = Estado.CAINDO
 
             tempo_deitado = agora - self._inicio_deitado

@@ -91,8 +91,9 @@ class ServicoVisao:
         self._thread.start()
 
     def parar(self) -> None:
+        """Pode ser chamado mais de uma vez (Ctrl+C e bloco finally)."""
         self._rodando = False
-        if self._thread:
+        if self._thread and self._thread.is_alive() and self._thread is not threading.current_thread():
             self._thread.join(timeout=3)
 
     # ------------------------------------------------------------ leitura pela API
@@ -105,6 +106,7 @@ class ServicoVisao:
             status = dict(self._status)
         status["camera_online"] = (time.time() - self._ultimo_quadro_em) < CAMERA_OFFLINE_APOS_S
         status["camera_ativa"] = self.ativa
+        status["camera_id"] = self.camera["id"]  # a PWA usa para mostrar o nome da câmera certa
         return status
 
     # ------------------------------------------------------------ loop interno

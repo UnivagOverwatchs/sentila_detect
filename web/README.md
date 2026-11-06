@@ -31,8 +31,13 @@ Para abrir no celular na mesma rede: `python servidor.py --host 0.0.0.0` e acess
 então use só em rede interna confiável.
 
 ## Fluxo em tempo real
-`useTempoReal` abre o WebSocket `/api/ws`: status a cada 1 s e alertas no instante em que surgem.
-Alerta novo → tela cheia vermelha + sirene + vibração + notificação do sistema.
+- `useTempoReal` abre o WebSocket `/api/ws`: status a cada 1 s e alertas no instante em que surgem.
+  Alerta novo → tela cheia vermelha + sirene + vibração + notificação do sistema.
+- `VideoAoVivo` busca `/api/quadro` quadro a quadro (pede o próximo só quando o anterior chega e
+  pausa com a aba em segundo plano). Não usamos `<img src="/api/video">` (MJPEG) porque o stream
+  prende uma conexão e o navegador limita ~6 por servidor: a interface congelava ao trocar de tela.
+- `services/api.js` é o único arquivo que conhece as URLs; os dados vêm do banco configurado no
+  servidor (PostgreSQL ou SQLite — ver README da raiz).
 
 ## Pendências para a próxima etapa (documentação)
 - Login JWT e perfis Cuidador/Gestor (RF12).
