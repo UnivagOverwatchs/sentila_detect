@@ -660,3 +660,91 @@ def test_envio_que_estoura_o_tempo_vira_falha_registrada(ambiente):
     push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
     ultimo = banco.listar_envios_push()[0]
     assert ultimo["resultado"] == "FALHA" and "timed out" in ultimo["detalhe"]
+
+
+# ------------------------------------------------------------------ Push: envio em paralelo e assinatura incompatível
+class _ErroHttp(Exception):
+    """Imita a exceção do pywebpush: carrega a resposta HTTP do serviço de push."""
+
+    def __init__(self, status, texto=""):
+        super().__init__(f"Push failed: {status} {texto}")
+
+        class Resposta:
+            status_code = status
+            text = texto
+
+        self.response = Resposta()
+
+
+def test_envio_vai_para_todos_os_aparelhos_ao_mesmo_tempo(ambiente):
+    import threading
+
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    for i in range(3):
+        banco.salvar_assinatura(f"https://push.exemplo/p{i}", "k", "a")
+    # As 3 chamadas só passam se acontecerem JUNTAS; em fila, a barreira estoura (BrokenBarrierError).
+    barreira = threading.Barrier(3, timeout=5)
+
+    def enviar(**_):
+        barreira.wait()
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert [e["resultado"] for e in banco.listar_envios_push()] == ["OK", "OK", "OK"]
+
+
+def test_assinatura_de_outra_chave_vapid_e_removida_sem_retentativa(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/antiga", "k", "a")
+    chamadas = []
+
+    def enviar(**_):
+        chamadas.append(1)
+        raise _ErroHttp(403, "the VAPID credentials in the authorization header do not correspond to the credentials used")
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert len(chamadas) == 1                      # 403 não melhora sozinho: sem 2ª tentativa
+    assert banco.listar_assinaturas() == []        # a assinatura inútil saiu da lista
+    ultimo = banco.listar_envios_push()[0]
+    assert ultimo["resultado"] == "FALHA" and "outra chave VAPID" in ultimo["detalhe"]
+
+
+def test_403_sem_ser_de_chave_mantem_o_aparelho_e_nao_repete(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/apple", "k", "a")
+    chamadas = []
+
+    def enviar(**_):
+        chamadas.append(1)
+        raise _ErroHttp(403, '{"reason":"BadJwtToken"}')
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert len(chamadas) == 1 and len(banco.listar_assinaturas()) == 1  # não apaga por um 403 qualquer
+
+
+def test_erro_5xx_e_tentado_de_novo(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/instavel", "k", "a")
+    chamadas = []
+
+    def enviar(**_):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            raise _ErroHttp(503, "indisponível")
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert len(chamadas) == 2 and banco.listar_envios_push()[0]["resultado"] == "OK"
