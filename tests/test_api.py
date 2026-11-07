@@ -573,3 +573,35 @@ def test_notificador_remoto_fora_do_ar_nao_derruba():
         raise requests.ConnectionError("sem rede")
 
     NotificadorRemoto("http://zap:8100", "tok", enviar=falso_post)._post(5)  # só registra no log
+
+
+def test_envio_de_push_usa_tempo_limite(ambiente):
+    from sentinela_api.push import TIMEOUT_ENVIO_S, ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/t", "k", "a")
+    recebido = {}
+
+    def enviar(**kw):
+        recebido.update(kw)
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert recebido["timeout"] == TIMEOUT_ENVIO_S  # a chamada de rede nunca fica sem limite
+    assert banco.listar_envios_push()[0]["resultado"] == "OK"
+
+
+def test_envio_que_estoura_o_tempo_vira_falha_registrada(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/lento", "k", "a")
+
+    def enviar(**_):
+        raise TimeoutError("connect timed out")
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    ultimo = banco.listar_envios_push()[0]
+    assert ultimo["resultado"] == "FALHA" and "timed out" in ultimo["detalhe"]
