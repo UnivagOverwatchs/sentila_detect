@@ -14,6 +14,14 @@ function chaveParaBytes(base64url) {
   return Uint8Array.from(bruto, (c) => c.charCodeAt(0));
 }
 
+/** A assinatura existente foi criada com ESTA mesma chave do servidor? (muda quando as chaves VAPID são trocadas) */
+function mesmaChave(assinatura, bytesDoServidor) {
+  const atual = assinatura.options?.applicationServerKey;
+  if (!atual) return false; // navegador sem essa informação: refazer é o caminho seguro
+  const bytes = new Uint8Array(atual);
+  return bytes.length === bytesDoServidor.length && bytes.every((v, i) => v === bytesDoServidor[i]);
+}
+
 /** Nome sugerido para o aparelho na lista (ex.: "iPhone", "Android", "Windows"). */
 export function nomeDoAparelho() {
   const ua = navigator.userAgent;
@@ -33,9 +41,15 @@ export async function ativarPush() {
   try {
     const { chave } = await api.chavePush();
     const registro = await navigator.serviceWorker.ready;
-    const assinatura =
-      (await registro.pushManager.getSubscription()) ??
-      (await registro.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chaveParaBytes(chave) }));
+    const chaveBytes = chaveParaBytes(chave);
+    let assinatura = await registro.pushManager.getSubscription();
+    // Assinatura criada com outra chave (ex.: depois de trocar as chaves VAPID): o serviço de push a rejeitaria
+    // com 403. Cancela e cria de novo, sem precisar limpar os dados do site.
+    if (assinatura && !mesmaChave(assinatura, chaveBytes)) {
+      await assinatura.unsubscribe();
+      assinatura = null;
+    }
+    assinatura ??= await registro.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chaveBytes });
     await api.salvarAssinaturaPush({ ...assinatura.toJSON(), nome: nomeDoAparelho() });
     return "ativo";
   } catch {
