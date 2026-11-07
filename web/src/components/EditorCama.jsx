@@ -13,6 +13,18 @@ const MAX_PONTOS = 12;
 
 const pontosSvg = (poli) => poli.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
 
+// Mesma regra do servidor: uma "cama" quase sem área é só uma linha (pontos clicados em fila).
+const AREA_MINIMA = 0.02;
+
+function areaDoPoligono(poli) {
+  let soma = 0;
+  poli.forEach(([x1, y1], i) => {
+    const [x2, y2] = poli[(i + 1) % poli.length];
+    soma += x1 * y2 - x2 * y1;
+  });
+  return Math.abs(soma) / 2;
+}
+
 export function EditorCama({ camera, aoSalvar, aoFechar }) {
   const [zonas, setZonas] = useState(camera.area_cama ?? []);
   const [atual, setAtual] = useState([]); // zona que está sendo desenhada
@@ -63,6 +75,12 @@ export function EditorCama({ camera, aoSalvar, aoFechar }) {
 
   async function salvar() {
     const final = atual.length >= 3 && zonas.length < MAX_ZONAS ? [...zonas, atual] : zonas;
+    if (final.some((z) => areaDoPoligono(z) < AREA_MINIMA)) {
+      setErro(
+        "A área marcada é quase uma linha. Clique nos cantos dando a volta na cama: dois pontos em cima e dois embaixo, em sequência."
+      );
+      return;
+    }
     setSalvando(true);
     setErro("");
     try {
@@ -70,7 +88,7 @@ export function EditorCama({ camera, aoSalvar, aoFechar }) {
       aoSalvar(atualizada);
       aoFechar();
     } catch (e) {
-      setErro(e.detalhe ? "Dados inválidos para a área da cama." : "Não foi possível salvar. Tente de novo.");
+      setErro(typeof e.detalhe === "string" ? e.detalhe : "Não foi possível salvar. Tente de novo.");
     } finally {
       setSalvando(false);
     }
@@ -81,8 +99,9 @@ export function EditorCama({ camera, aoSalvar, aoFechar }) {
   return (
     <div className="editor-cama">
       <p className="dica">
-        Clique nos cantos da cama, na ordem. Com 3 ou mais pontos, toque em <strong>Concluir cama</strong>. Deitar dentro da
-        área marcada não gera alerta.
+        Clique nos <strong>cantos da cama, dando a volta</strong> (por exemplo: topo-esquerda, topo-direita, baixo-direita,
+        baixo-esquerda). Com 3 ou mais pontos, toque em <strong>Concluir cama</strong>. Deitar dentro da área marcada não
+        gera alerta. O sombreado mostra a área que será usada.
       </p>
       <div className="editor-cama__imagem" onClick={clicar} role="presentation">
         {quadro ? (
@@ -94,6 +113,7 @@ export function EditorCama({ camera, aoSalvar, aoFechar }) {
           {zonas.map((z, i) => (
             <polygon key={i} points={pontosSvg(z)} className="editor-cama__zona" />
           ))}
+          {atual.length >= 3 && <polygon points={pontosSvg(atual)} className="editor-cama__zona" />}
           {atual.length >= 2 && <polyline points={pontosSvg(atual)} className="editor-cama__tracado" />}
           {atual.map(([x, y], i) => (
             <circle key={i} cx={x * 100} cy={y * 100} r="1" className="editor-cama__ponto" />

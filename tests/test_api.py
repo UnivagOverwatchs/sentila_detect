@@ -606,3 +606,25 @@ def test_area_cama_invalida_e_recusada(ambiente, poligonos):
 def test_area_cama_de_camera_inexistente(ambiente):
     _, _, cliente = ambiente
     assert cliente.put("/api/cameras/99/area-cama", json={"poligonos": []}).status_code == 404
+
+
+def test_area_cama_quase_uma_linha_e_recusada_com_mensagem_clara(ambiente):
+    _, _, cliente = ambiente
+    linha = [[0.10, 0.39], [0.32, 0.43], [0.50, 0.42], [0.66, 0.44]]  # o que o usuário marcou ao clicar em fila
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [linha]})
+    assert r.status_code == 422 and "pequena demais" in r.json()["detail"]
+    assert cliente.get("/api/cameras").json()[0]["area_cama"] == []  # nada foi gravado
+
+
+def test_area_cama_com_contorno_cruzado_e_recusada(ambiente):
+    _, _, cliente = ambiente
+    gravata = [[0.1, 0.6], [0.9, 0.9], [0.9, 0.6], [0.1, 0.7]]  # cruza e ainda tem área (8% da imagem)
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [gravata]})
+    assert r.status_code == 422 and "se cruza" in r.json()["detail"]
+
+
+def test_area_cama_retangulo_e_aceito(ambiente):
+    _, servico, cliente = ambiente
+    retangulo = [[0.02, 0.62], [0.98, 0.62], [0.98, 0.99], [0.02, 0.99]]
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [retangulo]})
+    assert r.status_code == 200 and servico.area_cama == [retangulo]

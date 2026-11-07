@@ -125,6 +125,36 @@ ADMIN_SO_ESCRITA = ("/api/configuracao", "/api/cameras", "/api/contatos")
 ADMIN_TOTAL = ("/api/usuarios", "/api/push/aparelhos", "/api/push/envios")
 
 
+AREA_MINIMA_CAMA = 0.02  # fração da imagem: abaixo disso a "cama" é praticamente uma linha
+
+
+def _area_poligono(poligono) -> float:
+    """Área pela fórmula do cadarço (coordenadas de 0 a 1 = fração da imagem)."""
+    soma = 0.0
+    for i, (x1, y1) in enumerate(poligono):
+        x2, y2 = poligono[(i + 1) % len(poligono)]
+        soma += x1 * y2 - x2 * y1
+    return abs(soma) / 2
+
+
+def _orientacao(a, b, c) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _poligono_se_cruza(poligono) -> bool:
+    """True se dois lados que não são vizinhos se cruzam (contorno em 'gravata' ou zigue-zague)."""
+    n = len(poligono)
+    for i in range(n):
+        a, b = poligono[i], poligono[(i + 1) % n]
+        for j in range(i + 1, n):
+            if j == i or (j + 1) % n == i or (i + 1) % n == j:
+                continue  # lados vizinhos compartilham um ponto
+            c, d = poligono[j], poligono[(j + 1) % n]
+            if (_orientacao(a, b, c) * _orientacao(a, b, d) < 0) and (_orientacao(c, d, a) * _orientacao(c, d, b) < 0):
+                return True
+    return False
+
+
 def _exige_admin(metodo: str, caminho: str) -> bool:
     if any(caminho == a or caminho.startswith(a + "/") for a in ADMIN_TOTAL):
         return True
@@ -243,6 +273,11 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         for poligono in dados.poligonos:
             if any(not (0.0 <= v <= 1.0) for ponto in poligono for v in ponto):
                 raise HTTPException(422, "As coordenadas da cama devem ficar entre 0 e 1")
+            if _area_poligono(poligono) < AREA_MINIMA_CAMA:
+                raise HTTPException(422, "A área da cama ficou pequena demais (menos de 2% da imagem), quase uma linha. "
+                                         "Marque os cantos dando a volta na cama: dois em cima e dois embaixo.")
+            if _poligono_se_cruza(poligono):
+                raise HTTPException(422, "O contorno da cama se cruza. Marque os cantos em sequência, dando a volta, sem cruzar linhas.")
         camera = banco.salvar_area_cama(camera_id, dados.poligonos) if banco.obter_camera(camera_id) else None
         if camera is None:
             raise HTTPException(404, "Câmera não encontrada")
