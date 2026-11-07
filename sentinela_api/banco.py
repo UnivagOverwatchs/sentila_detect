@@ -85,6 +85,14 @@ CREATE TABLE IF NOT EXISTS sessao (
     criada_em   TIMESTAMP NOT NULL,
     expira_em   TIMESTAMP NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agente (
+    id              {pk},
+    nome            VARCHAR(80) NOT NULL UNIQUE,
+    token_hash      VARCHAR(64) NOT NULL UNIQUE,
+    ativo           BOOLEAN NOT NULL DEFAULT {verdadeiro},
+    criado_em       TIMESTAMP NOT NULL,
+    ultimo_contato  TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS envio_push (
     id             {pk},
     assinatura_id  INTEGER,
@@ -468,3 +476,45 @@ class Banco:
 
     def limpar_sessoes_expiradas(self) -> None:
         self._executar("DELETE FROM sessao WHERE expira_em <= ?", (_agora(),))
+
+    # ------------------------------------------------------------ agentes de visão (computadores com câmera)
+    _CAMPOS_AGENTE = "id, nome, ativo, criado_em, ultimo_contato"
+
+    @staticmethod
+    def _agente_publico(linha: Dict[str, Any]) -> Dict[str, Any]:
+        linha["ativo"] = bool(linha["ativo"])
+        return linha
+
+    def criar_agente(self, nome: str, token_hash: str) -> Dict[str, Any]:
+        novo_id = self._inserir("INSERT INTO agente (nome, token_hash, criado_em) VALUES (?, ?, ?)",
+                                (nome, token_hash, _agora()))
+        return self._agente_publico(self._consultar(f"SELECT {self._CAMPOS_AGENTE} FROM agente WHERE id = ?", (novo_id,))[0])
+
+    def obter_agente_por_token(self, token_hash: str) -> Optional[Dict[str, Any]]:
+        """Agente ATIVO dono deste token (o banco guarda só o SHA-256); None se não existe ou foi revogado."""
+        linhas = self._consultar(f"SELECT {self._CAMPOS_AGENTE} FROM agente WHERE token_hash = ?", (token_hash,))
+        if not linhas or not linhas[0]["ativo"]:
+            return None
+        return self._agente_publico(linhas[0])
+
+    def url_stream_da_camera(self, camera_id: int) -> Optional[str]:
+        """Fonte registrada da câmera (nas câmeras de agente é "agente:<id>:<nome>", sem senha nenhuma)."""
+        linhas = self._consultar("SELECT url_stream FROM camera WHERE id = ?", (camera_id,))
+        return linhas[0]["url_stream"] if linhas else None
+
+    def listar_agentes(self) -> List[Dict[str, Any]]:
+        return [self._agente_publico(a) for a in
+                self._consultar(f"SELECT {self._CAMPOS_AGENTE} FROM agente ORDER BY id")]
+
+    def definir_agente_ativo(self, nome: str, ativo: bool) -> bool:
+        existe = bool(self._consultar("SELECT id FROM agente WHERE nome = ?", (nome,)))
+        self._executar("UPDATE agente SET ativo = ? WHERE nome = ?", (ativo, nome))
+        return existe
+
+    def trocar_token_do_agente(self, nome: str, token_hash: str) -> bool:
+        existe = bool(self._consultar("SELECT id FROM agente WHERE nome = ?", (nome,)))
+        self._executar("UPDATE agente SET token_hash = ?, ativo = ? WHERE nome = ?", (token_hash, True, nome))
+        return existe
+
+    def registrar_contato_agente(self, agente_id: int) -> None:
+        self._executar("UPDATE agente SET ultimo_contato = ? WHERE id = ?", (_agora(), agente_id))

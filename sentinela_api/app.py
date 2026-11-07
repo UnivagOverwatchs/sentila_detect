@@ -26,6 +26,8 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
 Login (autenticacao.py): só é exigido com LOGIN_OBRIGATORIO=1 (servidor público). Sem isso o painel
 fica aberto e o servidor escuta só em 127.0.0.1 por padrão; ver servidor.py --host.
     POST /api/login  /api/logout   GET /api/eu   GET/POST/PATCH /api/usuarios (só ADMIN)
+
+Agente de visão (rotas_agente.py): /api/agente/* usa chave própria (Bearer), não o login por cookie.
 """
 
 import asyncio
@@ -42,6 +44,7 @@ from pydantic import BaseModel, Field
 
 from . import autenticacao as auth
 from .banco import Banco
+from .rotas_agente import criar_rotas_agente
 from .sensibilidade import aplicar_sensibilidade, rotulo_sensibilidade
 from .servico_visao import ServicoVisao
 
@@ -164,7 +167,8 @@ def _exige_admin(metodo: str, caminho: str) -> bool:
 
 def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None, push=None,
               exigir_login: bool = False, cookie_seguro: bool = False,
-              limitador: Optional[auth.LimitadorLogin] = None) -> FastAPI:
+              limitador: Optional[auth.LimitadorLogin] = None,
+              pasta_fotos: str = "alertas_queda", notificador_remoto=None) -> FastAPI:
     """Fábrica da aplicação: recebe as dependências prontas (facilita os testes).
 
     exigir_login=False mantém o painel aberto (uso local). Em servidor público, use True.
@@ -186,6 +190,8 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
                 raise HTTPException(403, "Origem não permitida")
         if not exigir_login or caminho in ROTAS_PUBLICAS or not caminho.startswith("/api/"):
             return
+        if caminho.startswith("/api/agente/"):
+            return  # os agentes de visão se autenticam com a chave própria (rotas_agente.py), não com cookie
         usuario = usuario_da_conexao(conn)
         if usuario is None:
             raise HTTPException(401, "Não autenticado")
@@ -382,6 +388,10 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         if senha_hash or dados.ativo is False or dados.papel:
             banco.encerrar_sessoes_do_usuario(usuario_id)  # nova senha/desativação/novo papel: entra de novo
         return atualizado
+
+    # ------------------------------------------------------------ agentes de visão (só no modo painel)
+    if hasattr(servico, "receber_quadro"):
+        app.include_router(criar_rotas_agente(banco, servico, push, notificador_remoto, pasta_fotos))
 
     # ---- Web Push (aviso com o app fechado)
     @app.get("/api/push/chave")
