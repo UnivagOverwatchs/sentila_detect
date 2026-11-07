@@ -8,6 +8,7 @@
  *   - Aparelhos que recebem alertas: lista dos celulares cadastrados para o push (renomear/remover).
  */
 import { useEffect, useState } from "react";
+import { EditorCama } from "../components/EditorCama.jsx";
 import { IconeFechar, IconeMais, IconeSino, IconeTelefone } from "../components/Icones.jsx";
 import { api } from "../services/api.js";
 import { pedirPermissaoNotificacao } from "../services/aviso.js";
@@ -23,6 +24,7 @@ export function Configuracoes({
   aoSalvarSensibilidade,
   cameras,
   aoAlternarCamera,
+  aoAtualizarCamera,
   contatos,
   aoCriarContato,
   aoRemoverContato,
@@ -37,6 +39,7 @@ export function Configuracoes({
   const [erroContato, setErroContato] = useState("");
   const [pushEstado, setPushEstado] = useState("");
   const [aparelhos, setAparelhos] = useState([]);
+  const [editandoCama, setEditandoCama] = useState(null); // id da câmera cuja cama está sendo marcada
 
   async function carregarAparelhos() {
     if (!admin) return;
@@ -126,11 +129,23 @@ export function Configuracoes({
                 <strong>{c.nome}</strong>
                 <small>{c.local}</small>
               </div>
+              {admin && (
+                <button
+                  type="button"
+                  className="botao botao--pequeno botao--fantasma"
+                  onClick={() => setEditandoCama(editandoCama === c.id ? null : c.id)}
+                >
+                  {c.area_cama?.length ? "Editar cama" : "Marcar cama"}
+                </button>
+              )}
               <label className="interruptor">
                 <input type="checkbox" checked={c.ativa} disabled={!admin} onChange={() => aoAlternarCamera(c)} />
                 <span aria-hidden="true" />
                 <span className="sr-only">Monitorar {c.nome}</span>
               </label>
+              {editandoCama === c.id && (
+                <EditorCama camera={c} aoSalvar={aoAtualizarCamera} aoFechar={() => setEditandoCama(null)} />
+              )}
             </li>
           ))}
         </ul>

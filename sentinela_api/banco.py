@@ -21,6 +21,7 @@ protegida por Lock basta para o volume de uma ILPI; se a conexão com o servidor
 reconectamos uma vez e repetimos a operação.
 """
 
+import json
 import os
 import sqlite3
 import threading
@@ -216,7 +217,8 @@ class Banco:
 
     def _migrar(self) -> None:
         """Acrescenta colunas novas em tabelas que já existiam (o CREATE IF NOT EXISTS não altera tabela pronta)."""
-        for comando in ("ALTER TABLE assinatura_push ADD COLUMN nome VARCHAR(80)",):
+        for comando in ("ALTER TABLE assinatura_push ADD COLUMN nome VARCHAR(80)",
+                        "ALTER TABLE camera ADD COLUMN area_cama TEXT"):
             try:
                 self._executar(comando)
             except Exception:  # noqa: BLE001 - a coluna já existe
@@ -264,17 +266,26 @@ class Banco:
         return self.obter_camera(novo_id)
 
     def listar_cameras(self) -> List[Dict[str, Any]]:
-        cameras = self._consultar("SELECT id, nome, local, ativa FROM camera ORDER BY id")
-        for c in cameras:
-            c["ativa"] = bool(c["ativa"])
-        return cameras
+        cameras = self._consultar("SELECT id, nome, local, ativa, area_cama FROM camera ORDER BY id")
+        return [self._montar_camera(c) for c in cameras]
+
+    @staticmethod
+    def _montar_camera(c: Dict[str, Any]) -> Dict[str, Any]:
+        c["ativa"] = bool(c["ativa"])
+        try:
+            c["area_cama"] = json.loads(c.get("area_cama") or "[]")
+        except ValueError:
+            c["area_cama"] = []
+        return c
 
     def obter_camera(self, camera_id: int) -> Optional[Dict[str, Any]]:
-        linhas = self._consultar("SELECT id, nome, local, ativa FROM camera WHERE id = ?", (camera_id,))
-        if not linhas:
-            return None
-        linhas[0]["ativa"] = bool(linhas[0]["ativa"])
-        return linhas[0]
+        linhas = self._consultar("SELECT id, nome, local, ativa, area_cama FROM camera WHERE id = ?", (camera_id,))
+        return self._montar_camera(linhas[0]) if linhas else None
+
+    def salvar_area_cama(self, camera_id: int, poligonos: List[List[List[float]]]) -> Optional[Dict[str, Any]]:
+        """Guarda as zonas de cama da câmera (polígonos com coordenadas de 0 a 1 da imagem). Lista vazia = sem cama."""
+        self._executar("UPDATE camera SET area_cama = ? WHERE id = ?", (json.dumps(poligonos), camera_id))
+        return self.obter_camera(camera_id)
 
     def atualizar_camera(self, camera_id: int, **campos) -> Optional[Dict[str, Any]]:
         permitidos = {k: v for k, v in campos.items() if k in {"nome", "local", "ativa"} and v is not None}

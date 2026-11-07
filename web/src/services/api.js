@@ -57,6 +57,9 @@ export const api = {
   atualizarCamera: (id, dados) =>
     requisitar(`/cameras/${id}`, { method: "PUT", body: JSON.stringify(dados) }),
 
+  salvarAreaCama: (id, poligonos) =>
+    requisitar(`/cameras/${id}/area-cama`, { method: "PUT", body: JSON.stringify({ poligonos }) }),
+
   configuracao: () => requisitar("/configuracao"),
   salvarConfiguracao: (sensibilidade) =>
     requisitar("/configuracao", { method: "PUT", body: JSON.stringify({ sensibilidade }) }),

@@ -174,6 +174,7 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             aoSalvarSensibilidade={salvarSensibilidade}
             cameras={cameras}
             aoAlternarCamera={alternarCamera}
+            aoAtualizarCamera={(c) => setCameras((atual) => atual.map((x) => (x.id === c.id ? c : x)))}
             contatos={contatos}
             aoCriarContato={criarContato}
             aoRemoverContato={removerContato}

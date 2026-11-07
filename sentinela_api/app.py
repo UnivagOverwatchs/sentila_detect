@@ -10,6 +10,7 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/alertas/{id}/imagem foto do momento do alerta
     GET    /api/cameras             câmeras cadastradas
     PUT    /api/cameras/{id}        ligar/desligar, renomear
+    PUT    /api/cameras/{id}/area-cama  marcar onde fica a cama (deitar ali não gera alerta)
     GET    /api/configuracao        sensibilidade
     PUT    /api/configuracao
     GET    /api/contatos            contatos de emergência
@@ -30,7 +31,7 @@ fica aberto e o servidor escuta só em 127.0.0.1 por padrão; ver servidor.py --
 import asyncio
 import math
 import os
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -58,6 +59,14 @@ class AtualizarCamera(BaseModel):
     nome: Optional[str] = Field(default=None, max_length=80)
     local: Optional[str] = Field(default=None, max_length=60)
     ativa: Optional[bool] = None
+
+
+Ponto = Annotated[list[float], Field(min_length=2, max_length=2)]
+
+
+class AreaCama(BaseModel):
+    """Zonas de cama: até 4 polígonos de 3 a 12 pontos, com x e y entre 0 e 1 (fração da imagem)."""
+    poligonos: list[Annotated[list[Ponto], Field(min_length=3, max_length=12)]] = Field(default_factory=list, max_length=4)
 
 
 class Configuracao(BaseModel):
@@ -114,6 +123,36 @@ ROTAS_PUBLICAS = {"/api/login", "/api/logout", "/api/eu"}
 ADMIN_SO_ESCRITA = ("/api/configuracao", "/api/cameras", "/api/contatos")
 # Áreas inteiras só do ADMIN.
 ADMIN_TOTAL = ("/api/usuarios", "/api/push/aparelhos", "/api/push/envios")
+
+
+AREA_MINIMA_CAMA = 0.02  # fração da imagem: abaixo disso a "cama" é praticamente uma linha
+
+
+def _area_poligono(poligono) -> float:
+    """Área pela fórmula do cadarço (coordenadas de 0 a 1 = fração da imagem)."""
+    soma = 0.0
+    for i, (x1, y1) in enumerate(poligono):
+        x2, y2 = poligono[(i + 1) % len(poligono)]
+        soma += x1 * y2 - x2 * y1
+    return abs(soma) / 2
+
+
+def _orientacao(a, b, c) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _poligono_se_cruza(poligono) -> bool:
+    """True se dois lados que não são vizinhos se cruzam (contorno em 'gravata' ou zigue-zague)."""
+    n = len(poligono)
+    for i in range(n):
+        a, b = poligono[i], poligono[(i + 1) % n]
+        for j in range(i + 1, n):
+            if j == i or (j + 1) % n == i or (i + 1) % n == j:
+                continue  # lados vizinhos compartilham um ponto
+            c, d = poligono[j], poligono[(j + 1) % n]
+            if (_orientacao(a, b, c) * _orientacao(a, b, d) < 0) and (_orientacao(c, d, a) * _orientacao(c, d, b) < 0):
+                return True
+    return False
 
 
 def _exige_admin(metodo: str, caminho: str) -> bool:
@@ -227,6 +266,23 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
             raise HTTPException(404, "Câmera não encontrada")
         if camera_id == servico.camera["id"]:
             servico.ativa = camera["ativa"]  # efeito imediato no serviço de visão
+        return camera
+
+    @app.put("/api/cameras/{camera_id}/area-cama")
+    def salvar_area_cama(camera_id: int, dados: AreaCama):
+        for poligono in dados.poligonos:
+            if any(not (0.0 <= v <= 1.0) for ponto in poligono for v in ponto):
+                raise HTTPException(422, "As coordenadas da cama devem ficar entre 0 e 1")
+            if _area_poligono(poligono) < AREA_MINIMA_CAMA:
+                raise HTTPException(422, "A área da cama ficou pequena demais (menos de 2% da imagem), quase uma linha. "
+                                         "Marque os cantos dando a volta na cama: dois em cima e dois embaixo.")
+            if _poligono_se_cruza(poligono):
+                raise HTTPException(422, "O contorno da cama se cruza. Marque os cantos em sequência, dando a volta, sem cruzar linhas.")
+        camera = banco.salvar_area_cama(camera_id, dados.poligonos) if banco.obter_camera(camera_id) else None
+        if camera is None:
+            raise HTTPException(404, "Câmera não encontrada")
+        if camera_id == servico.camera["id"]:
+            servico.area_cama = camera["area_cama"]  # vale já no próximo quadro
         return camera
 
     # ------------------------------------------------------------ configuração

@@ -248,7 +248,7 @@ Os testes sempre usam um SQLite temporário, nunca o banco do servidor.
 
 - **Posição da câmera:** no alto do canto do quarto (2–2,5 m), em diagonal. Câmera na altura da mesa ou olhando de cima reduz a precisão do ângulo.
 - **Corpo inteiro:** ombros e quadril precisam aparecer; pessoa cortada pela borda é ignorada de propósito.
-- **Cama x chão:** a câmera não diferencia; deitar na cama devagar pode gerar alerta de queda. Próximo passo: marcar a área da cama na imagem.
+- **Cama x chão:** em *Configurações → Câmeras → Marcar cama* o administrador clica nos cantos da cama sobre a imagem da câmera (até 4 zonas). Enquanto o quadril estiver dentro da zona, deitar não gera alerta; fora dela a detecção é a de sempre. A zona aparece sombreada no vídeo. Quem sai da cama e deita no chão alerta normalmente. Sem zona marcada, o comportamento é o antigo.
 - **Login:** com `LOGIN_OBRIGATORIO=1` todo acesso à API, ao vídeo, às fotos e ao tempo real exige usuário e senha (sessão em cookie HttpOnly, senha com scrypt, bloqueio de 15 min após 5 erros seguidos). O primeiro administrador nasce pela linha de comando: `python -m sentinela_api.usuarios criar --usuario admin --nome Administrador --papel ADMIN` (a senha é pedida no terminal). Depois o administrador cria os demais em *Configurações → Usuários*. Papéis: **ADMIN** altera configurações, câmeras, contatos, usuários e aparelhos; **CUIDADOR** acompanha o painel e trata alertas. Sem `LOGIN_OBRIGATORIO`, o painel continua aberto (uso local); use `--host 0.0.0.0` só em rede interna confiável.
 - **Modo painel (servidor sem câmera, ex.: VPS):** `python servidor.py --painel` sobe só a API, a interface, o login e o push, lendo o banco que outro computador (com a câmera) alimenta. A imagem Docker e o passo a passo com Apache e HTTPS estão em [deploy/IMPLANTACAO.md](deploy/IMPLANTACAO.md). Ainda sem vídeo ao vivo nem foto dos alertas nesse modo.
 - **Aparelhos e envios de push:** *Configurações → Aparelhos que recebem alertas* lista, renomeia e remove os celulares cadastrados e mostra o resultado do último aviso. Cada tentativa de envio fica na tabela `envio_push` (OK/FALHA); o envio tenta de novo uma vez em erro passageiro e remove aparelhos expirados.
@@ -260,7 +260,7 @@ Os testes sempre usam um SQLite temporário, nunca o banco do servidor.
 - [x] Login e perfis Cuidador/Administrador (sessão em cookie; sem JWT)
 - [x] Web Push (alerta com o app fechado) — falta testar em celular com HTTPS
 - [ ] Várias câmeras no mesmo servidor
-- [ ] Área da cama (zona onde deitar é normal)
+- [x] Área da cama (zona onde deitar é normal) — falta calibrar com a câmera real
 - [ ] Residentes vinculados às câmeras/eventos
 - [ ] Implantação na ILPI parceira e calibração com a equipe
 

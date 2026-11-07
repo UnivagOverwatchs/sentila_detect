@@ -575,6 +575,61 @@ def test_notificador_remoto_fora_do_ar_nao_derruba():
     NotificadorRemoto("http://zap:8100", "tok", enviar=falso_post)._post(5)  # só registra no log
 
 
+# --------------------------- área da cama ---------------------------
+
+def test_salvar_area_cama_persiste_e_vale_na_hora(ambiente):
+    banco, servico, cliente = ambiente
+    area = [[[0.3, 0.5], [0.8, 0.5], [0.8, 0.95], [0.3, 0.95]]]
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": area})
+    assert r.status_code == 200 and r.json()["area_cama"] == area
+    assert servico.area_cama == area                                   # efeito imediato no serviço de visão
+    assert cliente.get("/api/cameras").json()[0]["area_cama"] == area  # fica gravada no banco
+
+
+def test_limpar_area_cama(ambiente):
+    banco, servico, cliente = ambiente
+    cliente.put("/api/cameras/1/area-cama", json={"poligonos": [[[0.1, 0.1], [0.5, 0.1], [0.5, 0.5]]]})
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": []})
+    assert r.status_code == 200 and r.json()["area_cama"] == [] and servico.area_cama == []
+
+
+@pytest.mark.parametrize("poligonos", [
+    [[[0.1, 0.1], [0.5, 0.1]]],                      # só 2 pontos
+    [[[0.1, 0.1], [0.5, 0.1], [1.5, 0.5]]],           # fora da imagem
+    [[[0.1, 0.1], [0.5, 0.1], [0.5]]],                # ponto incompleto
+])
+def test_area_cama_invalida_e_recusada(ambiente, poligonos):
+    _, _, cliente = ambiente
+    assert cliente.put("/api/cameras/1/area-cama", json={"poligonos": poligonos}).status_code == 422
+
+
+def test_area_cama_de_camera_inexistente(ambiente):
+    _, _, cliente = ambiente
+    assert cliente.put("/api/cameras/99/area-cama", json={"poligonos": []}).status_code == 404
+
+
+def test_area_cama_quase_uma_linha_e_recusada_com_mensagem_clara(ambiente):
+    _, _, cliente = ambiente
+    linha = [[0.10, 0.39], [0.32, 0.43], [0.50, 0.42], [0.66, 0.44]]  # o que o usuário marcou ao clicar em fila
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [linha]})
+    assert r.status_code == 422 and "pequena demais" in r.json()["detail"]
+    assert cliente.get("/api/cameras").json()[0]["area_cama"] == []  # nada foi gravado
+
+
+def test_area_cama_com_contorno_cruzado_e_recusada(ambiente):
+    _, _, cliente = ambiente
+    gravata = [[0.1, 0.6], [0.9, 0.9], [0.9, 0.6], [0.1, 0.7]]  # cruza e ainda tem área (8% da imagem)
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [gravata]})
+    assert r.status_code == 422 and "se cruza" in r.json()["detail"]
+
+
+def test_area_cama_retangulo_e_aceito(ambiente):
+    _, servico, cliente = ambiente
+    retangulo = [[0.02, 0.62], [0.98, 0.62], [0.98, 0.99], [0.02, 0.99]]
+    r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [retangulo]})
+    assert r.status_code == 200 and servico.area_cama == [retangulo]
+
+
 def test_envio_de_push_usa_tempo_limite(ambiente):
     from sentinela_api.push import TIMEOUT_ENVIO_S, ServicoPush
 
