@@ -748,3 +748,22 @@ def test_erro_5xx_e_tentado_de_novo(ambiente):
     push._espera_retentativa_s = 0
     push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
     assert len(chamadas) == 2 and banco.listar_envios_push()[0]["resultado"] == "OK"
+
+
+def test_push_usa_sessao_que_conecta_so_por_ipv4(ambiente):
+    from sentinela_api.push import AdaptadorIPv4, ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/ipv4", "k", "a")
+    recebido = {}
+
+    def enviar(**kw):
+        recebido.update(kw)
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    sessao = recebido["requests_session"]
+    adaptador = sessao.get_adapter("https://fcm.googleapis.com/")
+    assert isinstance(adaptador, AdaptadorIPv4)
+    # O socket é ligado a um endereço IPv4: tentativas IPv6 falham na hora em vez de esperar o tempo limite.
+    assert adaptador.poolmanager.connection_pool_kw["source_address"] == ("0.0.0.0", 0)
