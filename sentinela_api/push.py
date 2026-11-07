@@ -22,6 +22,9 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
+import requests
+from requests.adapters import HTTPAdapter
+
 from .banco import Banco
 
 
@@ -40,6 +43,27 @@ def gerar_chaves() -> Dict[str, str]:
     publica = vapid.public_key.public_bytes(serialization.Encoding.X962,
                                             serialization.PublicFormat.UncompressedPoint)
     return {"VAPID_PUBLIC_KEY": _b64url(publica), "VAPID_PRIVATE_KEY": _b64url(privada)}
+
+
+
+
+class AdaptadorIPv4(HTTPAdapter):
+    """Conecta SÓ por IPv4.
+
+    Em redes onde o IPv6 até o Google/Apple não completa, cada endereço IPv6 gasta o tempo limite
+    inteiro antes de o IPv4 ser tentado: medido, a mesma chamada levava 40 s e passa a levar 0,3 s.
+    Ligar o socket a 0.0.0.0 faz as tentativas IPv6 falharem na hora e cair direto no IPv4.
+    """
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs["source_address"] = ("0.0.0.0", 0)
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+
+def sessao_ipv4() -> requests.Session:
+    sessao = requests.Session()
+    sessao.mount("https://", AdaptadorIPv4())
+    return sessao
 
 
 MAX_ENVIOS_SIMULTANEOS = 8  # aparelhos avisados ao mesmo tempo
@@ -98,13 +122,15 @@ class ServicoPush:
             from pywebpush import webpush
             enviar = webpush
         codigo, detalhe = None, None
+        sessao = sessao_ipv4()
         for tentativa in (1, 2):
             try:
                 enviar(subscription_info={"endpoint": sub["endpoint"],
                                           "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
                        data=mensagem, vapid_private_key=self._chave_privada,
                        vapid_claims={"sub": self._contato}, ttl=3600,
-                       timeout=TIMEOUT_ENVIO_S)  # sem isso, uma conexão que trava deixa o envio parado para sempre
+                       timeout=TIMEOUT_ENVIO_S,  # sem isso, uma conexão que trava deixa o envio parado para sempre
+                       requests_session=sessao)
                 self._registrar(sub, alerta_id, "OK", None, None)
                 return
             except Exception as erro:  # noqa: BLE001
