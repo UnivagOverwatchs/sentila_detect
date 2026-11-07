@@ -16,6 +16,7 @@ O celular só aceita push em páginas HTTPS (localhost também vale, para testes
 
 import base64
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
 import time
@@ -40,6 +41,10 @@ def gerar_chaves() -> Dict[str, str]:
                                             serialization.PublicFormat.UncompressedPoint)
     return {"VAPID_PUBLIC_KEY": _b64url(publica), "VAPID_PRIVATE_KEY": _b64url(privada)}
 
+
+MAX_ENVIOS_SIMULTANEOS = 8  # aparelhos avisados ao mesmo tempo
+# Trecho da resposta do FCM quando a assinatura foi criada com OUTRA chave VAPID (ex.: depois de trocar as chaves).
+_CHAVE_INCOMPATIVEL = "do not correspond"
 
 TIMEOUT_ENVIO_S = 10  # limite de espera por tentativa de envio (conexão e resposta)
 
@@ -73,11 +78,21 @@ class ServicoPush:
             "alerta_id": alerta["id"],
         })
         alerta_id = alerta["id"] if isinstance(alerta["id"], int) else None
-        for sub in self.banco.listar_assinaturas():
-            self._enviar_uma(sub, mensagem, alerta_id)
+        assinaturas = self.banco.listar_assinaturas()
+        if not assinaturas:
+            return
+        # Todos os aparelhos ao mesmo tempo: um aparelho lento ou com problema não atrasa os outros.
+        with ThreadPoolExecutor(max_workers=min(MAX_ENVIOS_SIMULTANEOS, len(assinaturas))) as pool:
+            for sub in assinaturas:
+                pool.submit(self._enviar_uma, sub, mensagem, alerta_id)
+
+    @staticmethod
+    def _erro_passageiro(codigo: Optional[int]) -> bool:
+        """Vale tentar de novo? Sim: sem resposta (queda de rede, tempo esgotado), 429 ou erro do servidor (5xx)."""
+        return codigo is None or codigo == 429 or codigo >= 500
 
     def _enviar_uma(self, sub: Dict[str, Any], mensagem: str, alerta_id: Optional[int] = None) -> None:
-        """Tenta enviar (com 1 nova tentativa em erro passageiro) e registra o resultado em envio_push."""
+        """Tenta enviar (com 1 nova tentativa só em erro passageiro) e registra o resultado em envio_push."""
         enviar = self._enviar
         if enviar is None:
             from pywebpush import webpush
@@ -93,11 +108,20 @@ class ServicoPush:
                 self._registrar(sub, alerta_id, "OK", None, None)
                 return
             except Exception as erro:  # noqa: BLE001
-                codigo = getattr(getattr(erro, "response", None), "status_code", None)
+                resposta = getattr(erro, "response", None)
+                codigo = getattr(resposta, "status_code", None)
                 detalhe = f"{type(erro).__name__}: {erro}"
+                texto = str(getattr(resposta, "text", "") or "") + detalhe
                 if codigo in (404, 410):  # o aparelho cancelou ou a assinatura expirou: não adianta insistir
                     self.banco.remover_assinatura(sub["endpoint"])
                     break
+                if codigo == 403 and _CHAVE_INCOMPATIVEL in texto:
+                    # Assinatura feita com outra chave VAPID: nunca mais funciona até o aparelho se cadastrar de novo.
+                    self.banco.remover_assinatura(sub["endpoint"])
+                    detalhe = "assinatura removida: criada com outra chave VAPID (o aparelho precisa ativar as notificações de novo)"
+                    break
+                if not self._erro_passageiro(codigo):
+                    break  # 400/401/403... não melhoram sozinhos: tentar de novo só gasta tempo
                 if tentativa == 1:
                     time.sleep(self._espera_retentativa_s)
         print(f"[Push] falha ao enviar ({codigo or 'erro'}): {detalhe}")
