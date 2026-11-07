@@ -87,17 +87,17 @@ def main() -> None:
     if not push.configurado:
         print("[Sentinela] Push desativado: defina VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY no .env "
               "(python -m sentinela_api.push --gerar-chaves).")
+    whatsapp = NotificadorRemoto()  # no modo painel quem avisa é o painel, quando o agente envia o alerta
+    if whatsapp.configurado:
+        print(f"[Sentinela] WhatsApp: avisando o notificador em {whatsapp.url}")
+        if os.getenv("WHATSAPP_URL"):
+            print("[Sentinela] Atenção: WHATSAPP_URL também está definido; deixe vazio para não enviar em dobro.")
+    else:
+        print("[Sentinela] WhatsApp: NOTIFICADOR_URL/NOTIFICADOR_TOKEN não configurados (sem envio imediato).")
     if args.painel:
         servico = ServicoRemoto(banco)
         print("[Sentinela] Modo painel: sem câmera neste servidor (a detecção roda em outro computador).")
     else:
-        whatsapp = NotificadorRemoto()
-        if whatsapp.configurado:
-            print(f"[Sentinela] WhatsApp: avisando o notificador em {whatsapp.url}")
-            if os.getenv("WHATSAPP_URL"):
-                print("[Sentinela] Atenção: WHATSAPP_URL também está definido; deixe vazio para não enviar em dobro.")
-        else:
-            print("[Sentinela] WhatsApp: NOTIFICADOR_URL/NOTIFICADOR_TOKEN não configurados (sem envio imediato).")
         servico = ServicoVisao(banco, camera, args.fonte, servico_push=push, notificador_remoto=whatsapp)
     servico.iniciar()
 
@@ -114,7 +114,9 @@ def main() -> None:
         print("[Sentinela] ATENÇÃO: acessível pela rede e SEM login. Defina LOGIN_OBRIGATORIO=1 no .env.")
     print(f"[Sentinela] Abra http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.porta}")
     config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB, push, exigir_login=exigir_login,
-                                      cookie_seguro=cookie_seguro), host=args.host, port=args.porta,
+                                      cookie_seguro=cookie_seguro,
+                                      pasta_fotos=os.getenv("PASTA_FOTOS", "alertas_queda"),
+                                      notificador_remoto=whatsapp), host=args.host, port=args.porta,
                             log_level="warning", timeout_graceful_shutdown=2)
     try:
         ServidorUvicorn(config, servico).run()

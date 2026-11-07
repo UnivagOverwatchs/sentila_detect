@@ -202,21 +202,52 @@ class ServicoVisao:
 
 
 class ServicoRemoto:
-    """Modo painel: servidor SEM câmera (ex.: VPS). Só mostra o que outro computador gravou no banco.
+    """Modo painel: servidor SEM câmera (ex.: VPS).
 
-    Faz o papel do ServicoVisao para a API: não captura vídeo, não detecta nada e não grava alertas.
-    Quem detecta é o computador com a câmera, que escreve no mesmo banco; o painel lê pelo WebSocket.
-    Limitações atuais: sem vídeo ao vivo e sem foto dos alertas (os arquivos ficam no outro computador).
+    Faz o papel do ServicoVisao para a API, mas não captura nem detecta: quem faz isso é o AGENTE DE VISÃO
+    (agente.py), que envia o alerta, a foto, um quadro por segundo e o status por HTTPS (rotas_agente.py).
+    Computadores antigos que gravam direto no mesmo banco continuam funcionando; só não têm vídeo nem foto aqui.
     """
+
+    AGENTE_ONLINE_S = 15.0  # sem notícias do agente por esse tempo = câmera offline
 
     def __init__(self, banco: Banco):
         self.banco = banco
-        self.cfg_queda = ConfigQueda()  # a sensibilidade vai para o banco; o detector remoto a lê ao reiniciar
+        self.cfg_queda = ConfigQueda()
         self.ativa = True
         self.area_cama = []
-        cameras = banco.listar_cameras()
-        self.camera: Dict[str, Any] = cameras[0] if cameras else {"id": 0, "nome": "Câmera remota", "local": "", "ativa": True}
-        self._jpeg = ServicoVisao._codificar(quadro_mensagem("Camera em outro computador"))
+        self._lock = threading.Lock()
+        self._quadros: Dict[int, bytes] = {}
+        self._status: Dict[int, Dict[str, Any]] = {}
+        self._visto: Dict[int, float] = {}
+        self._ultima_camera: Optional[int] = None
+        self._placeholder = ServicoVisao._codificar(quadro_mensagem("Camera em outro computador"))
+
+    # -------------------------------------------------- recebido dos agentes
+    def receber_quadro(self, camera_id: int, jpeg: bytes) -> None:
+        with self._lock:
+            self._quadros[camera_id] = jpeg
+            self._visto[camera_id] = time.time()
+            self._ultima_camera = camera_id
+
+    def receber_status(self, camera_id: int, status: Dict[str, Any]) -> None:
+        with self._lock:
+            self._status[camera_id] = dict(status)
+            self._visto[camera_id] = time.time()
+            self._ultima_camera = camera_id
+
+    # -------------------------------------------------- lido pela API
+    @property
+    def camera(self) -> Dict[str, Any]:
+        """Câmera mostrada no painel: a do agente que falou por último; senão, a primeira cadastrada."""
+        with self._lock:
+            atual = self._ultima_camera
+        if atual is not None:
+            camera = self.banco.obter_camera(atual)
+            if camera:
+                return camera
+        cameras = self.banco.listar_cameras()
+        return cameras[0] if cameras else {"id": 0, "nome": "Câmera remota", "local": "", "ativa": True, "area_cama": []}
 
     def iniciar(self) -> None:
         pass
@@ -225,8 +256,22 @@ class ServicoRemoto:
         pass
 
     def jpeg_atual(self) -> bytes:
-        return self._jpeg
+        camera_id = self.camera["id"]
+        with self._lock:
+            recente = time.time() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
+            return self._quadros[camera_id] if recente and camera_id in self._quadros else self._placeholder
 
     def status(self) -> Dict[str, Any]:
-        return {"fps": 0.0, "pessoas": 0, "estado": "normal", "erro": None, "camera_online": True,
-                "camera_ativa": True, "camera_id": self.camera["id"], "modo": "painel"}
+        camera_id = self.camera["id"]
+        with self._lock:
+            visto = self._visto.get(camera_id)
+            recebido = dict(self._status.get(camera_id, {}))
+        if visto is None:
+            # Nenhum agente falou ainda (ou o computador antigo grava direto no banco): não acusar câmera offline.
+            return {"fps": 0.0, "pessoas": 0, "estado": "normal", "erro": None, "camera_online": True,
+                    "camera_ativa": True, "camera_id": camera_id, "modo": "painel"}
+        online = (time.time() - visto) < self.AGENTE_ONLINE_S and recebido.get("camera_online", True)
+        return {"fps": recebido.get("fps", 0.0), "pessoas": recebido.get("pessoas", 0),
+                "estado": recebido.get("estado", "normal") if online else "normal",
+                "erro": recebido.get("erro"), "camera_online": online, "camera_ativa": True,
+                "camera_id": camera_id, "modo": "painel"}

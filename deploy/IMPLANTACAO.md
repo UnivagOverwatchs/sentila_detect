@@ -64,8 +64,16 @@ docker run --rm -it --network host --env-file .env sentinela-painel \
 
 ## 5. Subir o painel
 
+As fotos dos alertas que os agentes enviam ficam numa pasta da VPS, fora do container (sobrevivem a atualizações):
+
 ```bash
-docker run -d --name sentinela-painel --restart unless-stopped --network host --env-file .env sentinela-painel
+mkdir -p /opt/sentinela/dados/alertas
+chown 10001:10001 /opt/sentinela/dados/alertas
+```
+
+```bash
+docker run -d --name sentinela-painel --restart unless-stopped --network host --env-file .env \
+  -v /opt/sentinela/dados/alertas:/app/alertas_queda sentinela-painel
 sleep 5
 curl -s http://127.0.0.1:8090/api/eu
 ```
@@ -104,7 +112,44 @@ systemctl list-timers | grep -i certbot
 
 O `--dry-run` deve terminar com "simulated renewal succeeded". Se não houver um timer do certbot, avise.
 
-## 9. No computador que detecta as quedas
+## 9. Agente de visão (recomendado): câmera em qualquer lugar, alertas e fotos no painel
+
+O **agente** (`agente.py`) roda onde a câmera é alcançável (um computador pequeno no local da câmera) e envia ao
+painel, por HTTPS, o alerta, uma foto do momento e um quadro por segundo para a tela "ao vivo". O vídeo **não sai**
+do local, e o computador do agente **não precisa** alcançar o banco: com isso dá para fechar a porta 5432.
+
+1. **Na VPS**, crie a chave do agente (aparece UMA vez; guarde num gerenciador de senhas):
+
+```bash
+docker exec -it sentinela-painel python -m sentinela_api.agentes criar --nome "Quarto 1"
+```
+
+   Outros comandos: `listar`, `nova-chave --nome ...` (a chave antiga deixa de valer) e `revogar --nome ...`.
+
+2. **No computador da câmera**, no `.env` (a chave NUNCA vai na linha de comando):
+
+```
+SENTINELA_URL=https://painel.sentinelaunivag.com.br
+SENTINELA_TOKEN=<a chave do passo 1>
+CAMERA_FONTE=0          # 0 = webcam; ou rtsp://usuario:senha@IP-DA-CAMERA:554/caminho
+CAMERA_NOME=Quarto 1
+CAMERA_LOCAL=Térreo
+```
+
+3. Instale as dependências (`pip install -r requirements_pose.txt`) e rode `python agente.py`. A câmera aparece no
+   painel, e a sensibilidade, a câmera ligada/desligada e a **área da cama** marcadas no painel chegam ao agente em
+   até 10 s, sem reiniciar.
+4. Se a internet cair, os alertas ficam na pasta `fila_agente/` e seguem quando ela voltar (até depois de reiniciar).
+   A foto local é apagada depois do envio (`AGENTE_GUARDAR_FOTOS=1` mantém).
+5. Em redes onde o IPv6 trava, ponha `AGENTE_FORCAR_IPV4=1` no `.env` do agente.
+
+O push e o WhatsApp saem **do painel**, no instante em que o alerta chega; o computador do agente não precisa de
+chaves VAPID nem do token do notificador.
+
+> O fluxo antigo (computador com câmera gravando direto no PostgreSQL com `servidor.py`) continua funcionando, mas
+> exige expor o banco e não mostra vídeo nem fotos no painel da VPS.
+
+## 9b. Computador que grava direto no banco (fluxo antigo)
 
 Nada muda no código. Só confira que o `.env` dele continua apontando para o mesmo banco e usa as mesmas
 chaves VAPID. Os celulares se cadastram **no endereço novo** (Configurações → Ativar notificações).
@@ -123,8 +168,9 @@ apenas o acorda por `POST /notificar`; o painel da VPS **não** detecta nem avis
 4. Teste: `curl http://<servidor>:8100/saude` deve mostrar `"whatsapp_conectado": true`.
 
 Se o aviso imediato falhar, o notificador encontra o alerta sozinho no banco em poucos segundos.
-Limitação atual: a foto do alerta só entra na mensagem se o notificador alcançar `SENTINELA_API_URL`
-(a API do computador que detecta), pois o painel da VPS não tem as fotos.
+Com o **agente de visão** (seção 9), as fotos ficam no painel; aponte `SENTINELA_API_URL` do notificador para
+`https://painel.sentinelaunivag.com.br` se ele precisar anexar a foto. No fluxo antigo, a foto só entra na mensagem se o
+notificador alcançar a API do computador que detecta.
 
 ## Atualizar depois
 
@@ -134,7 +180,8 @@ Envie um pacote novo, descompacte por cima (o `.env` não está no pacote) e rod
 cd /opt/sentinela
 docker build -f deploy/Dockerfile -t sentinela-painel .
 docker rm -f sentinela-painel
-docker run -d --name sentinela-painel --restart unless-stopped --network host --env-file .env sentinela-painel
+docker run -d --name sentinela-painel --restart unless-stopped --network host --env-file .env \
+  -v /opt/sentinela/dados/alertas:/app/alertas_queda sentinela-painel
 ```
 
 ## Desfazer

@@ -21,7 +21,9 @@ COPY servidor.py main_pose.py ./
 COPY --from=interface /web/dist ./web/dist
 
 # Usuário sem privilégios: se alguém invadir o app, não é root no container.
-RUN useradd --system --no-create-home sentinela && mkdir -p /app/alertas_queda && chown sentinela /app/alertas_queda
+# UID fixo (10001): é o dono da pasta de fotos montada da VPS (chown 10001:10001 no guia).
+RUN useradd --system --uid 10001 --no-create-home sentinela && mkdir -p /app/alertas_queda && chown sentinela /app/alertas_queda
+ENV PASTA_FOTOS=/app/alertas_queda
 USER sentinela
 
 # O compose/run usa a rede do host: o app escuta só em 127.0.0.1:8090 e o Apache faz o proxy com HTTPS.
