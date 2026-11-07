@@ -41,6 +41,8 @@ def gerar_chaves() -> Dict[str, str]:
     return {"VAPID_PUBLIC_KEY": _b64url(publica), "VAPID_PRIVATE_KEY": _b64url(privada)}
 
 
+TIMEOUT_ENVIO_S = 10  # limite de espera por tentativa de envio (conexão e resposta)
+
 _TITULOS = {"QUEDA": "Queda detectada", "MOVIMENTO_ANOMALO": "Pessoa no chão"}
 
 
@@ -86,7 +88,8 @@ class ServicoPush:
                 enviar(subscription_info={"endpoint": sub["endpoint"],
                                           "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]}},
                        data=mensagem, vapid_private_key=self._chave_privada,
-                       vapid_claims={"sub": self._contato}, ttl=3600)
+                       vapid_claims={"sub": self._contato}, ttl=3600,
+                       timeout=TIMEOUT_ENVIO_S)  # sem isso, uma conexão que trava deixa o envio parado para sempre
                 self._registrar(sub, alerta_id, "OK", None, None)
                 return
             except Exception as erro:  # noqa: BLE001

@@ -628,3 +628,35 @@ def test_area_cama_retangulo_e_aceito(ambiente):
     retangulo = [[0.02, 0.62], [0.98, 0.62], [0.98, 0.99], [0.02, 0.99]]
     r = cliente.put("/api/cameras/1/area-cama", json={"poligonos": [retangulo]})
     assert r.status_code == 200 and servico.area_cama == [retangulo]
+
+
+def test_envio_de_push_usa_tempo_limite(ambiente):
+    from sentinela_api.push import TIMEOUT_ENVIO_S, ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/t", "k", "a")
+    recebido = {}
+
+    def enviar(**kw):
+        recebido.update(kw)
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    assert recebido["timeout"] == TIMEOUT_ENVIO_S  # a chamada de rede nunca fica sem limite
+    assert banco.listar_envios_push()[0]["resultado"] == "OK"
+
+
+def test_envio_que_estoura_o_tempo_vira_falha_registrada(ambiente):
+    from sentinela_api.push import ServicoPush
+
+    banco, _, _ = ambiente
+    banco.salvar_assinatura("https://push.exemplo/lento", "k", "a")
+
+    def enviar(**_):
+        raise TimeoutError("connect timed out")
+
+    push = ServicoPush(banco, "a", "b", enviar_fn=enviar)
+    push._espera_retentativa_s = 0
+    push._enviar_para_todos(banco.registrar_alerta(1, 1, "queda", 0.9, None))
+    ultimo = banco.listar_envios_push()[0]
+    assert ultimo["resultado"] == "FALHA" and "timed out" in ultimo["detalhe"]
