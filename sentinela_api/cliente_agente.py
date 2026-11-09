@@ -59,9 +59,14 @@ class ClienteAgente:
                  "erro": (str(status["erro"])[:200] if status.get("erro") else None)}
         self._chamar("post", "/api/agente/status", json=corpo)
 
-    def enviar_quadro(self, camera_id: int, jpeg: bytes) -> None:
-        self._chamar("post", "/api/agente/quadro", params={"camera_id": camera_id}, data=jpeg,
-                     headers={"Content-Type": "image/jpeg"})
+    def enviar_quadro(self, camera_id: int, jpeg: bytes) -> bool:
+        """Envia um quadro. Devolve True se alguém está assistindo (então vale mandar mais quadros por segundo)."""
+        resposta = self._chamar("post", "/api/agente/quadro", params={"camera_id": camera_id}, data=jpeg,
+                                headers={"Content-Type": "image/jpeg"})
+        try:
+            return bool(resposta.json().get("assistindo", True))
+        except ValueError:  # painel antigo (204 sem corpo): na dúvida, trata como "há espectador"
+            return True
 
     def enviar_alerta(self, camera_id: int, track_id: int, tipo: str, confianca: float,
                       jpeg: Optional[bytes]) -> Dict[str, Any]:
@@ -155,32 +160,51 @@ class BancoRemoto:
 
 
 class Sincronizador:
-    """Quadro a cada segundo, status a cada poucos segundos, configuração a cada 10 s."""
+    """Vídeo ao vivo, status e configuração, cada um no seu ritmo.
+
+    Vídeo: uma thread própria manda o quadro mais recente. Com espectador no painel, o ritmo é `fps_video`
+    (padrão 6 quadros/s); sem ninguém olhando, 1 quadro a cada `espera_sem_espectador_s` (padrão 2 s), o que poupa a
+    internet do local da câmera. Status a cada 3 s e configuração a cada 10 s ficam em outra thread, para uma chamada
+    lenta de status não atrasar o vídeo.
+    """
 
     def __init__(self, cliente: ClienteAgente, servico, camera_id: int, aplicar_sensibilidade=None,
-                 intervalo_quadro_s: float = 1.0, intervalo_status_s: float = 3.0, intervalo_config_s: float = 10.0):
+                 fps_video: float = 6.0, espera_sem_espectador_s: float = 2.0,
+                 intervalo_status_s: float = 3.0, intervalo_config_s: float = 10.0):
         self.cliente = cliente
         self.servico = servico
         self.camera_id = camera_id
         self._aplicar_sensibilidade = aplicar_sensibilidade
-        self._intervalos = (intervalo_quadro_s, intervalo_status_s, intervalo_config_s)
+        self._pausa_com_espectador_s = 1.0 / max(fps_video, 0.2)
+        self._pausa_sem_espectador_s = espera_sem_espectador_s
+        self._intervalos = (intervalo_status_s, intervalo_config_s)
         self._parar = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._threads: list = []
+        self.assistindo = False
 
     def iniciar(self) -> None:
-        self._thread = threading.Thread(target=self._loop, name="sincronizador-agente", daemon=True)
-        self._thread.start()
+        self._threads = [threading.Thread(target=self._loop_video, name="video-agente", daemon=True),
+                         threading.Thread(target=self._loop_status, name="status-agente", daemon=True)]
+        for t in self._threads:
+            t.start()
 
     def parar(self) -> None:
         self._parar.set()
-        if self._thread:
-            self._thread.join(timeout=3)
+        for t in self._threads:
+            t.join(timeout=3)
+
+    def enviar_quadro_uma_vez(self) -> None:
+        try:
+            self.assistindo = self.cliente.enviar_quadro(self.camera_id, self.servico.jpeg_atual())
+        except (requests.RequestException, ErroDefinitivo) as erro:
+            self.assistindo = False
+            print(f"[Agente] quadro não enviado ({erro.__class__.__name__}): {str(erro)[:100]}")
 
     def sincronizar_uma_vez(self, quadro=True, status=True, config=True) -> None:
         """Cada parte falha sozinha: um erro de rede em uma não impede as outras."""
-        passos = []
         if quadro:
-            passos.append(lambda: self.cliente.enviar_quadro(self.camera_id, self.servico.jpeg_atual()))
+            self.enviar_quadro_uma_vez()
+        passos = []
         if status:
             passos.append(lambda: self.cliente.enviar_status(self.camera_id, self.servico.status()))
         if config:
@@ -198,16 +222,21 @@ class Sincronizador:
         self.servico.ativa = bool(config["ativa"])
         self.servico.area_cama = list(config["area_cama"])  # o ServicoVisao repassa ao detector no próximo quadro
 
-    def _loop(self) -> None:
-        t_quadro, t_status, t_config = intervalos = self._intervalos
-        ultimo = {"quadro": 0.0, "status": 0.0, "config": 0.0}
+    def _loop_video(self) -> None:
+        while not self._parar.is_set():
+            inicio = time.monotonic()
+            self.enviar_quadro_uma_vez()
+            ritmo = self._pausa_com_espectador_s if self.assistindo else self._pausa_sem_espectador_s
+            self._parar.wait(max(0.0, ritmo - (time.monotonic() - inicio)))
+
+    def _loop_status(self) -> None:
+        t_status, t_config = self._intervalos
+        ultimo = {"status": 0.0, "config": 0.0}
         while not self._parar.is_set():
             agora = time.monotonic()
-            devidos = {nome: agora - ultimo[nome] >= limite
-                       for nome, limite in zip(("quadro", "status", "config"), intervalos)}
-            if any(devidos.values()):
-                self.sincronizar_uma_vez(**devidos)
-                for nome, devido in devidos.items():
-                    if devido:
-                        ultimo[nome] = agora
+            devido_status, devido_config = agora - ultimo["status"] >= t_status, agora - ultimo["config"] >= t_config
+            if devido_status or devido_config:
+                self.sincronizar_uma_vez(quadro=False, status=devido_status, config=devido_config)
+                ultimo["status"] = agora if devido_status else ultimo["status"]
+                ultimo["config"] = agora if devido_config else ultimo["config"]
             self._parar.wait(0.25)

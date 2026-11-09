@@ -166,3 +166,74 @@ def test_nova_chave_invalida_a_antiga_e_revogar_corta_o_acesso(painel_com_login)
     assert admin.patch(f"/api/agentes/{criado['id']}", json={"ativo": True}).json()["ativo"] is True
     assert agente.post("/api/agente/camera", json={"nome": "S"}, headers=_cab(nova)).status_code == 200
     assert admin.post("/api/agentes/999/nova-chave").status_code == 404
+
+
+# ------------------------------------------------------------------ vídeo ao vivo: ritmo conforme há espectador
+def test_painel_avisa_o_agente_quando_alguem_esta_assistindo(painel):
+    _, servico, cliente, token = painel
+    cam = _camera(cliente, token, "Sala")
+    enviar = lambda: cliente.post("/api/agente/quadro", params={"camera_id": cam}, content=JPEG_A, headers=_cab(token)).json()
+    assert enviar() == {"assistindo": False}
+    cliente.get("/api/quadro", params={"camera_id": cam})  # alguém abriu o vídeo no painel
+    assert enviar() == {"assistindo": True}
+    servico._espectador[cam] -= ServicoRemoto.ESPECTADOR_S + 1  # parou de olhar há mais de 6 s
+    assert enviar() == {"assistindo": False}
+
+
+def test_espectador_de_uma_camera_nao_conta_para_a_outra(painel):
+    _, _, cliente, token = painel
+    a, b = _camera(cliente, token, "Sala"), _camera(cliente, token, "Quarto")
+    cliente.get("/api/quadro", params={"camera_id": a})
+    resposta = lambda cam: cliente.post("/api/agente/quadro", params={"camera_id": cam}, content=JPEG_A, headers=_cab(token)).json()
+    assert resposta(a) == {"assistindo": True} and resposta(b) == {"assistindo": False}
+
+
+def test_camera_so_video_aparece_sem_deteccao_no_painel(painel):
+    _, _, cliente, token = painel
+    sala, navegador = _camera(cliente, token, "Sala"), _camera(cliente, token, "Celular")
+    cliente.post("/api/agente/status", headers=_cab(token), json={"camera_id": sala, "fps": 10})
+    cliente.post("/api/agente/status", headers=_cab(token), json={"camera_id": navegador, "fps": 6, "deteccao": False})
+    cameras = {c["id"]: c for c in cliente.get("/api/status").json()["cameras"]}
+    assert cameras[sala]["deteccao"] is True and cameras[navegador]["deteccao"] is False  # a tela não finge que protege
+
+
+def test_sincronizador_manda_mais_quadros_com_espectador_do_que_sem(painel):
+    import time
+
+    from sentinela_api.cliente_agente import Sincronizador
+
+    class ClienteDeMentira:
+        def __init__(self, assistindo):
+            self.assistindo, self.quadros = assistindo, 0
+
+        def enviar_quadro(self, camera_id, jpeg):
+            self.quadros += 1
+            return self.assistindo
+
+        def enviar_status(self, *a, **k):
+            pass
+
+        def configuracao(self, *a, **k):
+            return {"sensibilidade": 0.5, "ativa": True, "area_cama": []}
+
+    class Servico:
+        cfg_queda, ativa, area_cama = None, True, []
+
+        def jpeg_atual(self):
+            return JPEG_A
+
+        def status(self):
+            return {}
+
+    def rodar(assistindo):
+        cliente = ClienteDeMentira(assistindo)
+        sinc = Sincronizador(cliente, Servico(), 1, fps_video=40, espera_sem_espectador_s=0.3)
+        sinc.iniciar()
+        time.sleep(0.9)
+        sinc.parar()
+        return cliente.quadros
+
+    com, sem = rodar(True), rodar(False)
+    assert com >= 15          # ~40 por segundo pedidos: acompanha com folga para a máquina de teste
+    assert sem <= 5           # ~3 por segundo: poupa a internet quando ninguém está olhando
+    assert com > 3 * sem

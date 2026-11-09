@@ -241,6 +241,7 @@ class ServicoRemoto:
         self._quadros: Dict[int, bytes] = {}
         self._status: Dict[int, Dict[str, Any]] = {}
         self._visto: Dict[int, float] = {}
+        self._espectador: Dict[int, float] = {}  # última vez que alguém pediu o quadro desta câmera
         self._ultima_camera: Optional[int] = None
         self._placeholder = ServicoVisao._codificar(quadro_mensagem("Camera em outro computador"))
 
@@ -276,9 +277,16 @@ class ServicoRemoto:
     def parar(self) -> None:
         pass
 
+    ESPECTADOR_S = 6.0  # alguém pediu o quadro nos últimos 6 s = há espectador
+
+    def alguem_assistindo(self, camera_id: int) -> bool:
+        with self._lock:
+            return time.time() - self._espectador.get(camera_id, 0.0) < self.ESPECTADOR_S
+
     def jpeg_da_camera(self, camera_id: int) -> bytes:
         """Último quadro enviado pelo agente DESSA câmera (ou o aviso, se ela está sem notícias)."""
         with self._lock:
+            self._espectador[camera_id] = time.time()
             recente = time.time() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
             return self._quadros[camera_id] if recente and camera_id in self._quadros else self._placeholder
 
@@ -297,6 +305,7 @@ class ServicoRemoto:
             estados.append({"id": cam["id"], "nome": cam["nome"], "local": cam["local"], "ativa": cam["ativa"],
                             "online": online, "fps": recebido.get("fps", 0.0), "pessoas": recebido.get("pessoas", 0),
                             "estado": recebido.get("estado", "normal") if online else "normal",
+                            "deteccao": recebido.get("deteccao", True),
                             "erro": recebido.get("erro") if visto is not None else None,
                             "visto_ha_s": None if visto is None else int(agora - visto)})
         return estados
@@ -304,6 +313,7 @@ class ServicoRemoto:
     def jpeg_atual(self) -> bytes:
         camera_id = self.camera["id"]
         with self._lock:
+            self._espectador[camera_id] = time.time()
             recente = time.time() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
             return self._quadros[camera_id] if recente and camera_id in self._quadros else self._placeholder
 
@@ -320,4 +330,5 @@ class ServicoRemoto:
         return {"fps": recebido.get("fps", 0.0), "pessoas": recebido.get("pessoas", 0),
                 "estado": recebido.get("estado", "normal") if online else "normal",
                 "erro": recebido.get("erro"), "camera_online": online, "camera_ativa": True,
+                "deteccao": recebido.get("deteccao", True),
                 "camera_id": camera_id, "modo": "painel"}
