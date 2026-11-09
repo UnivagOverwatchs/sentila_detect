@@ -14,7 +14,7 @@ export function CameraDoAparelho({ camera }) {
   const [local, setLocal] = useState("");
   const [facing, setFacing] = useState("user");
   const previa = useRef(null);
-  const { fase, erro, assistindo, fps, pausada, stream, suportado, iniciar, parar, deteccao, pessoas, ultimoAlerta } = camera;
+  const { fase, erro, assistindo, fps, pausada, stream, suportado, iniciar, parar, deteccao, pessoas, achadas, ultimoAlerta } = camera;
   const ligada = fase === "transmitindo";
   const ocupada = fase === "pedindo" || fase === "conectando";
 
@@ -44,7 +44,8 @@ export function CameraDoAparelho({ camera }) {
           {ligada && (
             <p className={deteccao === "indisponivel" ? "erro" : "dica"} role="status">
               {deteccao === "carregando" && "Carregando a detecção de queda… (só na primeira vez, pode levar alguns segundos)"}
-              {deteccao === "ativa" && `Detecção de queda ligada · ${pessoas} ${pessoas === 1 ? "pessoa" : "pessoas"} em cena`}
+              {deteccao === "ativa" && `Detecção de queda ligada · ${pessoas} ${pessoas === 1 ? "pessoa" : "pessoas"} em cena` +
+                (achadas > pessoas ? ` · ${achadas - pessoas} vista(s) sem o tronco inteiro na imagem (não contam)` : "")}
               {deteccao === "indisponivel" && "A detecção de queda não carregou neste aparelho: a câmera só transmite vídeo e NÃO está protegendo."}
               {ultimoAlerta && ` · último alerta: ${ultimoAlerta.tipo === "queda" ? "queda" : "pessoa no chão"} às ${new Date(ultimoAlerta.quando).toLocaleTimeString("pt-BR")}`}
             </p>

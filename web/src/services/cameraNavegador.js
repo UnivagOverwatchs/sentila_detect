@@ -32,10 +32,12 @@ const FOTO_LARGURA = 960;
 const FOTO_QUALIDADE = 0.8;
 const MAX_TENTATIVAS_ALERTA = 6;
 const CONFIANCA_ALERTA = 0.9;
-const GRAVIDADE = { normal: 0, no_chao: 1, caindo: 1, alerta: 2 };
+// Ligações do esqueleto (mesmas de sentinela_pose/pontos.py).
+const LIGACOES = [[11, 12], [23, 24], [11, 23], [12, 24], [23, 25], [25, 27], [24, 26], [26, 28], [11, 13], [13, 15], [12, 14], [14, 16]];
+const GRAVIDADE ={ normal: 0, no_chao: 1, caindo: 1, alerta: 2 };
 
 // deteccao: "desligada" | "carregando" | "ativa" | "indisponivel"
-const PARADA = { fase: "parada", erro: "", nome: "", cameraId: null, assistindo: false, fps: 0, pausada: false, deteccao: "desligada", pessoas: 0, ultimoAlerta: null };
+const PARADA = { fase: "parada", erro: "", nome: "", cameraId: null, assistindo: false, fps: 0, pausada: false, deteccao: "desligada", pessoas: 0, achadas: 0, ultimoAlerta: null };
 
 /** Carrega o MediaPipe só quando a câmera do aparelho é ligada (o pacote é grande e não vai no carregamento do painel). */
 async function criarPoseLandmarker() {
@@ -109,6 +111,7 @@ class ControladorCamera {
     this._ultimoTempoVideo = -1;
     this._pessoas = [];
     this._pendentes = [];
+    this._desenho = null;
     this.inscrever = this.inscrever.bind(this);
     this.obter = this.obter.bind(this);
   }
@@ -227,7 +230,12 @@ class ControladorCamera {
     const poses = (resultado.landmarks ?? []).map((pessoa) => pessoa.map((p) => [p.x * largura, p.y * altura, p.visibility ?? 0]));
     const { pessoas, alertas } = this._detectorAtual(largura, altura).processar(poses, inicio / 1000);
     this._pessoas = pessoas;
-    if (pessoas.length !== this.estado.pessoas) this._definir({ pessoas: pessoas.length });
+    // Desenho: toda pose achada pelo modelo; as que o detector aceitou (tronco inteiro na imagem) levam cor e estado.
+    const aceitas = new Map(pessoas.filter((p) => p.temPose).map((p) => [p.pontos, p]));
+    this._desenho = { largura, altura, poses: poses.map((pontos) => ({ pontos, pessoa: aceitas.get(pontos) ?? null })) };
+    const contadas = aceitas.size;
+    if (contadas !== this.estado.pessoas) this._definir({ pessoas: contadas, achadas: poses.length });
+    else if (poses.length !== this.estado.achadas) this._definir({ achadas: poses.length });
 
     for (const alerta of alertas) await this._registrarAlerta(alerta);
     return Math.max(0, DETECCAO_MS - (performance.now() - inicio));
@@ -241,7 +249,9 @@ class ControladorCamera {
     const escala = Math.min(1, FOTO_LARGURA / v.videoWidth);
     c.width = Math.round(v.videoWidth * escala);
     c.height = Math.round(v.videoHeight * escala);
-    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    const ctx = c.getContext("2d");
+    ctx.drawImage(v, 0, 0, c.width, c.height);
+    this._desenharEsqueletos(ctx, c.width, c.height, true); // a foto do alerta mostra o esqueleto e os rótulos
     const blob = await new Promise((resolver) => c.toBlob(resolver, "image/jpeg", FOTO_QUALIDADE));
     return blob ? blobParaBase64(blob) : null;
   }
@@ -324,7 +334,9 @@ class ControladorCamera {
     const escala = Math.min(1, LARGURA / v.videoWidth);
     this._canvas.width = Math.round(v.videoWidth * escala);
     this._canvas.height = Math.round(v.videoHeight * escala);
-    this._canvas.getContext("2d").drawImage(v, 0, 0, this._canvas.width, this._canvas.height);
+    const ctx = this._canvas.getContext("2d");
+    ctx.drawImage(v, 0, 0, this._canvas.width, this._canvas.height);
+    this._desenharEsqueletos(ctx, this._canvas.width, this._canvas.height);
     const blob = await new Promise((resolver) => this._canvas.toBlob(resolver, "image/jpeg", QUALIDADE));
     if (!blob) return false;
     const resposta = await this._chamar(`/agente/quadro?camera_id=${this.estado.cameraId}`, {
@@ -334,6 +346,52 @@ class ControladorCamera {
     });
     this._quadrosDesdeStatus += 1;
     return Boolean(resposta?.assistindo);
+  }
+
+  /**
+   * Esqueleto por cima do vídeo ao vivo e da foto do alerta (igual ao agente em Python: "ID1 ALERTA 91°").
+   * Verde = pessoa normal; amarelo = caindo/no chão; vermelho = alerta; cinza = pessoa vista, mas SEM o tronco inteiro
+   * na imagem (ombros ou quadris cortados): o detector não consegue avaliar e não conta essa pessoa.
+   */
+  _desenharEsqueletos(ctx, largura, altura, momentoDoAlerta = false) {
+    const d = this._desenho;
+    if (!d || this.estado.deteccao !== "ativa") return;
+    if (momentoDoAlerta) {
+      ctx.strokeStyle = "#ef4444";
+      ctx.lineWidth = 6;
+      ctx.strokeRect(3, 3, largura - 6, altura - 6);
+      ctx.fillStyle = "rgba(15,23,42,0.75)";
+      ctx.fillRect(10, 10, 190, 28);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 16px sans-serif";
+      ctx.fillText("Momento do alerta", 18, 30);
+    }
+    const ex = largura / d.largura;
+    const ey = altura / d.altura;
+    ctx.lineWidth = 3;
+    ctx.font = "bold 14px sans-serif";
+    for (const { pontos, pessoa } of d.poses) {
+      const estado = pessoa?.estado;
+      const cor = !pessoa ? "#9ca3af" : estado === "alerta" ? "#ef4444" : estado === "normal" ? "#22c55e" : "#f59e0b";
+      ctx.strokeStyle = cor;
+      ctx.fillStyle = cor;
+      for (const [a, b] of LIGACOES) {
+        if (pontos[a][2] < 0.3 || pontos[b][2] < 0.3) continue;
+        ctx.beginPath();
+        ctx.moveTo(pontos[a][0] * ex, pontos[a][1] * ey);
+        ctx.lineTo(pontos[b][0] * ex, pontos[b][1] * ey);
+        ctx.stroke();
+      }
+      for (const i of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
+        if (pontos[i][2] < 0.3) continue;
+        ctx.beginPath();
+        ctx.arc(pontos[i][0] * ex, pontos[i][1] * ey, 4, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      const ancora = [pontos[0], pontos[11], pontos[12]].find((p) => p[2] >= 0.3) ?? pontos[0];
+      const texto = pessoa ? `ID${pessoa.id} ${estado.toUpperCase()} ${Math.round(pessoa.angulo)}°` : "TRONCO INCOMPLETO";
+      ctx.fillText(texto, Math.max(4, ancora[0] * ex - 20), Math.max(16, ancora[1] * ey - 14));
+    }
   }
 
   async _passoStatus() {
@@ -390,6 +448,7 @@ class ControladorCamera {
     this._detector = null;
     this._detectorDim = "";
     this._pessoas = [];
+    this._desenho = null;
     this._pendentes = [];
     this._ultimoTempoVideo = -1;
     try {

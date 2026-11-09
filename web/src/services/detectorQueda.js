@@ -287,14 +287,14 @@ export class DetectorQueda {
     const alertas = [];
     const vistos = new Set();
 
-    validas.forEach(([, m], k) => {
+    validas.forEach(([pontos, m], k) => {
       const id = ids[k];
       vistos.add(id);
       if (!this.maquinas.has(id)) this.maquinas.set(id, new MaquinaEstadosQueda(this.cfg));
       const maq = this.maquinas.get(id);
       const tipo = maq.atualizar(agora, m, this._naCama(m));
       if (tipo) alertas.push({ id, tipo, timestamp: agora, angulo: m.angulo });
-      pessoas.push({ id, estado: maq.estado, angulo: maq.ultimoAngulo, velocidade: maq.ultimaVelocidade, temPose: true });
+      pessoas.push({ id, estado: maq.estado, angulo: maq.ultimoAngulo, velocidade: maq.ultimaVelocidade, temPose: true, pontos });
     });
 
     for (const id of [...this.maquinas.keys()]) {
