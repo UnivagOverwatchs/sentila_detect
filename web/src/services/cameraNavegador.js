@@ -350,7 +350,7 @@ class ControladorCamera {
 
   /**
    * Esqueleto por cima do vídeo ao vivo e da foto do alerta (igual ao agente em Python: "ID1 ALERTA 91°").
-   * Verde = pessoa normal; amarelo = caindo/no chão; vermelho = alerta; cinza = pessoa vista, mas SEM o tronco inteiro
+   * Verde = pessoa normal; amarelo = caindo (inclinando/descendo rápido) ou deitada sem confirmar; vermelho = queda confirmada; cinza = pessoa vista, mas SEM o tronco inteiro
    * na imagem (ombros ou quadris cortados): o detector não consegue avaliar e não conta essa pessoa.
    */
   _desenharEsqueletos(ctx, largura, altura, momentoDoAlerta = false) {
@@ -372,7 +372,11 @@ class ControladorCamera {
     ctx.font = "bold 14px sans-serif";
     for (const { pontos, pessoa } of d.poses) {
       const estado = pessoa?.estado;
-      const cor = !pessoa ? "#9ca3af" : estado === "alerta" ? "#ef4444" : estado === "normal" ? "#22c55e" : "#f59e0b";
+      // Verde: em pé/normal. Amarelo: começando a cair (tronco inclinado, descida rápida) ou deitada ainda sem confirmar.
+      // Vermelho: queda confirmada (alerta). Só muda a cor do desenho; a decisão de alertar continua sendo do detector.
+      const cfg = this._cfgQueda;
+      const esticando = pessoa && (pessoa.angulo >= ANGULO_ATENCAO || pessoa.velocidade >= cfg.velocidade_queda * 0.6);
+      const cor = !pessoa ? "#9ca3af" : estado === "alerta" ? "#ef4444" : estado !== "normal" || esticando ? "#f59e0b" : "#22c55e";
       ctx.strokeStyle = cor;
       ctx.fillStyle = cor;
       for (const [a, b] of LIGACOES) {
