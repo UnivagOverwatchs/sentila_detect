@@ -226,7 +226,8 @@ class Banco:
     def _migrar(self) -> None:
         """Acrescenta colunas novas em tabelas que já existiam (o CREATE IF NOT EXISTS não altera tabela pronta)."""
         for comando in ("ALTER TABLE assinatura_push ADD COLUMN nome VARCHAR(80)",
-                        "ALTER TABLE camera ADD COLUMN area_cama TEXT"):
+                        "ALTER TABLE camera ADD COLUMN area_cama TEXT",
+                        "ALTER TABLE evento ADD COLUMN detalhes TEXT"):
             try:
                 self._executar(comando)
             except Exception:  # noqa: BLE001 - a coluna já existe
@@ -303,15 +304,40 @@ class Banco:
             self._executar(f"UPDATE camera SET {sets} WHERE id = ?", (*permitidos.values(), camera_id))
         return self.obter_camera(camera_id)
 
+    def excluir_camera(self, camera_id: int) -> Optional[List[str]]:
+        """
+        Apaga a câmera E o histórico dela (alertas e eventos). Devolve os caminhos das fotos para quem chamou apagar os
+        arquivos, ou None se a câmera não existe.
+        """
+        if self.obter_camera(camera_id) is None:
+            return None
+        fotos = [l["imagem"] for l in self._consultar(
+            "SELECT imagem FROM evento WHERE camera_id = ? AND imagem IS NOT NULL", (camera_id,))]
+        self._executar("DELETE FROM alerta WHERE evento_id IN (SELECT id FROM evento WHERE camera_id = ?)", (camera_id,))
+        self._executar("DELETE FROM evento WHERE camera_id = ?", (camera_id,))
+        self._executar("DELETE FROM camera WHERE id = ?", (camera_id,))
+        return fotos
+
     # ------------------------------------------------------------ eventos e alertas
     def registrar_alerta(self, camera_id: int, track_id: int, tipo_logica: str,
-                         confianca: float, imagem: Optional[str]) -> Dict[str, Any]:
+                         confianca: float, imagem: Optional[str], detalhes: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Cria o evento e o alerta PENDENTE correspondente (relação 1:1, como na documentação)."""
         evento_id = self._inserir(
-            "INSERT INTO evento (camera_id, track_id, tipo, confianca, ocorrido_em, imagem) VALUES (?, ?, ?, ?, ?, ?)",
-            (camera_id, track_id, TIPO_EVENTO[tipo_logica], round(confianca, 3), _agora(), imagem))
+            "INSERT INTO evento (camera_id, track_id, tipo, confianca, ocorrido_em, imagem, detalhes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (camera_id, track_id, TIPO_EVENTO[tipo_logica], round(confianca, 3), _agora(), imagem,
+             json.dumps(detalhes, separators=(",", ":")) if detalhes else None))
         alerta_id = self._inserir("INSERT INTO alerta (evento_id) VALUES (?)", (evento_id,))
         return self.obter_alerta(alerta_id)
+
+    def detalhes_do_alerta(self, alerta_id: int) -> Optional[Dict[str, Any]]:
+        """Números técnicos gravados no momento do alerta (None = alerta sem detalhes, ex.: criado antes deste recurso)."""
+        linhas = self._consultar("SELECT e.detalhes FROM alerta a JOIN evento e ON e.id = a.evento_id WHERE a.id = ?", (alerta_id,))
+        if not linhas or not linhas[0]["detalhes"]:
+            return None
+        try:
+            return json.loads(linhas[0]["detalhes"])
+        except ValueError:
+            return None
 
     _SELECT_ALERTA = """
         SELECT a.id, a.status, a.tratado_por, a.tratado_em,

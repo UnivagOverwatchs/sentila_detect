@@ -27,6 +27,7 @@ export function Configuracoes({
   cameras,
   aoAlternarCamera,
   aoRenomearCamera,
+  aoExcluirCamera,
   cameraDoAparelho,
   estadoCameras = [],
   aoAtualizarCamera,
@@ -156,7 +157,12 @@ export function Configuracoes({
                   {c.area_cama?.length ? "Editar cama" : "Marcar cama"}
                 </button>
               )}
-              <label className="interruptor">
+              {admin && (
+                <button type="button" className="botao botao--pequeno botao--fantasma" onClick={() => aoExcluirCamera?.(c)}>
+                  Excluir
+                </button>
+              )}
+              <label className="interruptor" title={c.ativa ? "Monitorando: clique para desativar" : "Desativada: clique para ativar"}>
                 <input type="checkbox" checked={c.ativa} disabled={!admin} onChange={() => aoAlternarCamera(c)} />
                 <span aria-hidden="true" />
                 <span className="sr-only">Monitorar {c.nome}</span>

@@ -206,7 +206,8 @@ class ServicoVisao:
                 for evento in alertas:
                     caminho = self.notificador.notificar(evento, tela)
                     confianca = min(evento.angulo_tronco / 90.0, 1.0)  # proxy simples: quão horizontal está o tronco
-                    alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho)
+                    alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho,
+                                                      detalhes={**evento.detalhes, "origem": "computador"})
                     if self.servico_push is not None:
                         self.servico_push.avisar(alerta)  # push para os celulares, mesmo com o app fechado
                     if self.notificador_remoto is not None:
@@ -257,6 +258,12 @@ class ServicoRemoto:
             self._status[camera_id] = dict(status)
             self._visto[camera_id] = time.time()
             self._ultima_camera = camera_id
+
+    def esquecer_camera(self, camera_id: int) -> None:
+        """A câmera foi excluída: some da memória (último quadro, status, espectador)."""
+        with self._lock:
+            for dados in (self._quadros, self._status, self._visto, self._espectador):
+                dados.pop(camera_id, None)
 
     # -------------------------------------------------- lido pela API
     @property

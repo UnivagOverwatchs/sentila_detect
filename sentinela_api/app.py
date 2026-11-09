@@ -10,6 +10,7 @@ Recursos (mesmos nomes do Quadro 8 da documentação, com prefixo /api):
     GET    /api/alertas/{id}/imagem foto do momento do alerta
     GET    /api/cameras             câmeras cadastradas
     PUT    /api/cameras/{id}        ligar/desligar, renomear
+    DELETE /api/cameras/{id}        excluir a câmera e o histórico dela (alertas e fotos)
     PUT    /api/cameras/{id}/area-cama  marcar onde fica a cama (deitar ali não gera alerta)
     GET    /api/configuracao        sensibilidade
     PUT    /api/configuracao
@@ -263,6 +264,13 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         usuario = getattr(request.state, "usuario", None)
         return banco.tratar_alerta(alerta_id, dados.status, usuario["nome"] if usuario else dados.tratado_por)
 
+    @app.get("/api/alertas/{alerta_id}/detalhes")
+    def detalhes_do_alerta(alerta_id: int):
+        """Números técnicos do momento do alerta (para calibrar os limiares); vazio nos alertas antigos."""
+        if not banco.obter_alerta(alerta_id):
+            raise HTTPException(404, "Alerta não encontrado")
+        return banco.detalhes_do_alerta(alerta_id) or {}
+
     @app.get("/api/alertas/{alerta_id}/imagem")
     def imagem_alerta(alerta_id: int):
         alerta = banco.obter_alerta(alerta_id)
@@ -284,6 +292,26 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         if camera_id == servico.camera["id"]:
             servico.ativa = camera["ativa"]  # efeito imediato no serviço de visão
         return camera
+
+    @app.delete("/api/cameras/{camera_id}", status_code=204)
+    def excluir_camera(camera_id: int):
+        """Exclui a câmera e todo o histórico dela (alertas, eventos e fotos). Só administrador (rota /api/cameras)."""
+        local = None if hasattr(servico, "esquecer_camera") else getattr(servico, "camera", None)  # modo painel: não há câmera local
+        if local and local["id"] == camera_id:
+            raise HTTPException(409, "Esta é a câmera ligada neste computador. Desative-a (interruptor) em vez de excluir.")
+        fotos = banco.excluir_camera(camera_id)
+        if fotos is None:
+            raise HTTPException(404, "Câmera não encontrada")
+        if hasattr(servico, "esquecer_camera"):
+            servico.esquecer_camera(camera_id)
+        pasta = os.path.realpath(pasta_fotos)
+        for caminho in fotos:  # só apaga arquivo que está dentro da pasta de fotos
+            real = os.path.realpath(caminho)
+            if os.path.commonpath([pasta, real]) == pasta and os.path.isfile(real):
+                try:
+                    os.remove(real)
+                except OSError:
+                    pass
 
     @app.put("/api/cameras/{camera_id}/area-cama")
     def salvar_area_cama(camera_id: int, dados: AreaCama):

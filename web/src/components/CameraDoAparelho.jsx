@@ -2,8 +2,8 @@
  * CameraDoAparelho.jsx - "Usar a câmera deste aparelho": o celular ou o computador vira uma câmera do sistema.
  * O navegador pede a permissão da câmera, igual ao pedido de notificações.
  *
- * Nesta etapa a câmera só TRANSMITE VÍDEO: ainda não detecta queda. A tela diz isso com todas as letras e o painel
- * marca a câmera como "SÓ VÍDEO", para ninguém achar que há proteção onde não há.
+ * A detecção de queda roda AQUI, na página (MediaPipe + detectorQueda.js). Se o modelo não carregar, a tela diz com todas
+ * as letras que a câmera só transmite e o painel marca "SÓ VÍDEO", para ninguém achar que há proteção onde não há.
  */
 import { useEffect, useRef, useState } from "react";
 import { IconeCamera } from "./Icones.jsx";
@@ -14,7 +14,7 @@ export function CameraDoAparelho({ camera }) {
   const [local, setLocal] = useState("");
   const [facing, setFacing] = useState("user");
   const previa = useRef(null);
-  const { fase, erro, assistindo, fps, pausada, stream, suportado, iniciar, parar } = camera;
+  const { fase, erro, assistindo, fps, pausada, stream, suportado, iniciar, parar, deteccao, pessoas, achadas, ultimoAlerta } = camera;
   const ligada = fase === "transmitindo";
   const ocupada = fase === "pedindo" || fase === "conectando";
 
@@ -41,6 +41,15 @@ export function CameraDoAparelho({ camera }) {
             {ligada && ` · ${fps} quadros/s${assistindo ? " (alguém está assistindo)" : " (ninguém assistindo: modo econômico)"}`}
             {pausada && " · pausada no painel"}
           </p>
+          {ligada && (
+            <p className={deteccao === "indisponivel" ? "erro" : "dica"} role="status">
+              {deteccao === "carregando" && "Carregando a detecção de queda… (só na primeira vez, pode levar alguns segundos)"}
+              {deteccao === "ativa" && `Detecção de queda ligada · ${pessoas} ${pessoas === 1 ? "pessoa" : "pessoas"} em cena` +
+                (achadas > pessoas ? ` · ${achadas - pessoas} vista(s) sem o tronco inteiro na imagem (não contam)` : "")}
+              {deteccao === "indisponivel" && "A detecção de queda não carregou neste aparelho: a câmera só transmite vídeo e NÃO está protegendo."}
+              {ultimoAlerta && ` · último alerta: ${ultimoAlerta.tipo === "queda" ? "queda" : "pessoa no chão"} às ${new Date(ultimoAlerta.quando).toLocaleTimeString("pt-BR")}`}
+            </p>
+          )}
           <button className="botao botao--fantasma" onClick={parar} disabled={ocupada}>
             Parar
           </button>
@@ -72,8 +81,8 @@ export function CameraDoAparelho({ camera }) {
 
       <div className="aviso-camera">
         <strong>Antes de usar:</strong> mantenha a <b>tela ligada</b> e esta página <b>aberta</b> (o aparelho para de enviar se o
-        navegador for para segundo plano). Nesta etapa a câmera <b>só mostra o vídeo</b>: ainda <b>não detecta queda</b>. Para vigiar
-        de verdade, use uma câmera com o agente.
+        navegador for para segundo plano). A queda é detectada <b>neste aparelho</b>: ele precisa estar parado, com a câmera
+        apontada para o ambiente e com boa luz. Para vigiar de forma contínua, prefira uma câmera fixa com o agente.
       </div>
     </section>
   );

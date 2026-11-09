@@ -98,5 +98,8 @@ class ConfigQueda:
     idade_minima_track: float = field(default_factory=lambda: _env_float("QUEDA_IDADE_MIN_TRACK", 1.0))
     # Janela da mediana do ângulo do tronco (suaviza tremidas de 1 quadro).
     janela_suavizacao: float = field(default_factory=lambda: _env_float("QUEDA_JANELA_SUAVIZACAO", 0.3))
+    # Pessoa que SOME perto da borda esquerda/direita/de cima (último quadril a menos dessa fração da imagem) saiu de cena:
+    # não é queda, e a contagem de "deitada/caindo" dela é descartada (evita alerta com a sala vazia).
+    margem_saida: float = field(default_factory=lambda: _env_float("QUEDA_MARGEM_SAIDA", 0.08))
     # Distância máxima (fração da diagonal da imagem) para associar a mesma pessoa entre quadros.
     distancia_max_rastreio: float = field(default_factory=lambda: _env_float("QUEDA_DIST_MAX_RASTREIO", 0.15))

@@ -161,6 +161,18 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
     setCameras((atual) => atual.map((c) => (c.id === atualizada.id ? atualizada : c)));
   }
 
+  async function excluirCamera(camera) {
+    const ok = window.confirm(
+      `Excluir a câmera "${camera.nome}"?\n\nIsso apaga também TODOS os alertas e fotos dela e não dá para desfazer.\n` +
+        "Se um agente ainda estiver ligado a ela, revogue a chave dele em 'Agentes de câmera' para a câmera não voltar sozinha.\n" +
+        "Para só parar de monitorar, use o interruptor.",
+    );
+    if (!ok) return;
+    await api.excluirCamera(camera.id);
+    setCameras((atual) => atual.filter((c) => c.id !== camera.id));
+    carregarAlertas();
+  }
+
   async function alternarCamera(camera) {
     const atualizada = await api.atualizarCamera(camera.id, { ativa: !camera.ativa });
     setCameras((atual) => atual.map((c) => (c.id === atualizada.id ? atualizada : c)));
@@ -233,6 +245,7 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             cameras={cameras}
             aoAlternarCamera={alternarCamera}
             aoRenomearCamera={renomearCamera}
+            aoExcluirCamera={excluirCamera}
             cameraDoAparelho={cameraDoAparelho}
             estadoCameras={status?.cameras}
             aoAtualizarCamera={(c) => setCameras((atual) => atual.map((x) => (x.id === c.id ? c : x)))}
@@ -251,7 +264,10 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
         <div className="banner-camera" role="status">
           <span>
             Câmera deste aparelho ligada: <strong>{cameraDoAparelho.nome}</strong>
-            {cameraDoAparelho.assistindo ? " · alguém está assistindo" : ""} · só vídeo, sem detecção de queda
+            {cameraDoAparelho.assistindo ? " · alguém está assistindo" : ""}
+            {cameraDoAparelho.deteccao === "ativa" && " · detectando queda"}
+            {cameraDoAparelho.deteccao === "carregando" && " · carregando a detecção…"}
+            {cameraDoAparelho.deteccao === "indisponivel" && " · SEM detecção de queda (só vídeo)"}
           </span>
           <button type="button" className="botao botao--pequeno" onClick={cameraDoAparelho.parar}>
             Parar

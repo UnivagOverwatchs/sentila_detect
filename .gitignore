@@ -4,7 +4,7 @@ __pycache__/
 alertas_queda/
 *.pyc
 # Modelos baixados pela detecção por pose
-modelos/
+/modelos/
 .pytest_cache/
 
 # Interface e banco local do servidor
@@ -14,3 +14,6 @@ sentinela.db
 
 # Pacotes de implantação gerados com git archive
 *.tar.gz
+
+# WASM do MediaPipe copiado no build (scripts/copiar-mediapipe.mjs)
+web/public/mediapipe/
