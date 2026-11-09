@@ -8,6 +8,7 @@
  *   - Aparelhos que recebem alertas: lista dos celulares cadastrados para o push (renomear/remover).
  */
 import { useEffect, useState } from "react";
+import { AgentesCamera } from "../components/AgentesCamera.jsx";
 import { EditorCama } from "../components/EditorCama.jsx";
 import { IconeFechar, IconeMais, IconeSino, IconeTelefone } from "../components/Icones.jsx";
 import { api } from "../services/api.js";
@@ -24,6 +25,8 @@ export function Configuracoes({
   aoSalvarSensibilidade,
   cameras,
   aoAlternarCamera,
+  aoRenomearCamera,
+  estadoCameras = [],
   aoAtualizarCamera,
   contatos,
   aoCriarContato,
@@ -125,10 +128,23 @@ export function Configuracoes({
         <ul className="lista-config">
           {cameras.map((c) => (
             <li key={c.id}>
-              <div>
+              <div className="lista-config__expande">
                 <strong>{c.nome}</strong>
-                <small>{c.local}</small>
+                <small>
+                  {c.local}
+                  {(() => {
+                    const e = estadoCameras.find((x) => x.id === c.id);
+                    if (!e) return "";
+                    const quando = e.visto_ha_s == null ? "" : ` · último sinal ${e.visto_ha_s < 90 ? "agora há pouco" : `há ${Math.round(e.visto_ha_s / 60)} min`}`;
+                    return ` · ${e.online === true ? "online" : e.online === false ? "offline" : "sem agente"}${quando}`;
+                  })()}
+                </small>
               </div>
+              {admin && (
+                <button type="button" className="botao botao--pequeno botao--fantasma" onClick={() => aoRenomearCamera?.(c)}>
+                  Renomear
+                </button>
+              )}
               {admin && (
                 <button
                   type="button"
@@ -150,9 +166,12 @@ export function Configuracoes({
           ))}
         </ul>
         <p className="dica">
-          Para adicionar outra câmera, inicie o servidor com <code>--fonte</code> e <code>--camera</code>.
+          Para adicionar uma câmera, crie um agente em <strong>Agentes de câmera</strong>, logo abaixo, e rode o <code>agente.py</code> no
+          computador que alcança a câmera.
         </p>
       </section>
+
+      {admin && <AgentesCamera />}
 
       <section className="cartao">
         <header className="cartao__cabecalho">

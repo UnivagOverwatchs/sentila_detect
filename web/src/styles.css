@@ -1181,3 +1181,149 @@ p {
 .editor-cama__espaco {
   flex: 1;
 }
+
+/* VÁRIAS CÂMERAS: seletor, grade e agentes ----------------------------------- */
+.seletor-cameras {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.seletor-cameras__lista {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip-camera {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--borda);
+  border-radius: 999px;
+  background: var(--superficie);
+  color: var(--texto-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.chip-camera.ativo {
+  border-color: var(--primaria);
+  background: var(--primaria-suave);
+  color: var(--primaria-escura);
+  font-weight: 600;
+}
+.alternador {
+  display: inline-flex;
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-p);
+  overflow: hidden;
+}
+.alternador button {
+  padding: 6px 12px;
+  border: 0;
+  background: var(--superficie);
+  color: var(--texto-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.alternador button.ativo {
+  background: var(--primaria);
+  color: #fff;
+}
+.grade-cameras {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+.tile-camera {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--raio-p);
+  overflow: hidden;
+  background: #0f172a;
+  cursor: pointer;
+}
+.tile-camera:hover {
+  border-color: var(--primaria);
+}
+.tile-camera img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.tile-camera__alerta {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--perigo);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.lateral__camera {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lateral__camera:hover {
+  color: #fff;
+}
+.chave-nova {
+  margin: 4px 0 14px;
+  padding: 14px;
+  border: 1px solid var(--atencao);
+  border-radius: var(--raio-p);
+  background: var(--atencao-suave);
+}
+.chave-nova p {
+  margin: 4px 0 8px;
+}
+.aviso-chave {
+  color: var(--texto);
+  font-size: 13px;
+}
+.bloco-codigo {
+  margin: 8px 0;
+  padding: 10px;
+  border-radius: var(--raio-p);
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+.linha-botoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.passos-agente {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--texto-2);
+}
+.passos-agente code {
+  font-family: var(--mono);
+  font-size: 12px;
+}

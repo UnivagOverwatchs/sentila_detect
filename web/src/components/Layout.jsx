@@ -20,7 +20,7 @@ const SELO = {
   camera: { classe: "selo--atencao", texto: "Câmera offline" },
 };
 
-export function Layout({ pagina, irPara, titulo, subtitulo, estado, cameras, nomeCuidador, rotuloPapel = "Cuidador responsável", aoSair, children }) {
+export function Layout({ pagina, irPara, titulo, subtitulo, estado, cameras, aoSelecionarCamera, nomeCuidador, rotuloPapel = "Cuidador responsável", aoSair, children }) {
   const selo = SELO[estado] ?? SELO.normal;
   return (
     <div className="app">
@@ -48,8 +48,10 @@ export function Layout({ pagina, irPara, titulo, subtitulo, estado, cameras, nom
         <ul className="lateral__cameras">
           {cameras.map((c) => (
             <li key={c.id}>
-              <span className={`ponto ${c.ativa ? "ponto--on" : "ponto--off"}`} />
-              {c.nome}
+              <button type="button" className="lateral__camera" onClick={() => aoSelecionarCamera?.(c.id)} title={`Ver ${c.nome}`}>
+                <span className={`ponto ${c.ativa ? "ponto--on" : "ponto--off"}`} />
+                {c.nome}
+              </button>
             </li>
           ))}
         </ul>

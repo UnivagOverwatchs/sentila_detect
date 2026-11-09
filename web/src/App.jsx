@@ -38,6 +38,43 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
   const [pagina, setPagina] = useState(paginaDoHash);
   const [alertas, setAlertas] = useState(armazenamento.ultimosAlertas);
   const [cameras, setCameras] = useState([]);
+  // Qual câmera aparece grande e se o painel mostra uma só ou todas (lembrado neste aparelho).
+  const [cameraId, setCameraId] = useState(() => {
+    try {
+      const salvo = localStorage.getItem("sentinela.camera");
+      return salvo ? Number(salvo) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [modoVideo, setModoVideo] = useState(() => {
+    try {
+      return localStorage.getItem("sentinela.modoVideo") === "grade" ? "grade" : "uma";
+    } catch {
+      return "uma";
+    }
+  });
+
+  function selecionarCamera(id) {
+    setCameraId(id);
+    setModoVideo("uma");
+    try {
+      localStorage.setItem("sentinela.camera", String(id));
+      localStorage.setItem("sentinela.modoVideo", "uma");
+    } catch {
+      /* sem armazenamento: vale só nesta sessão */
+    }
+    location.hash = "#/painel";
+  }
+
+  function mudarModoVideo(modo) {
+    setModoVideo(modo);
+    try {
+      localStorage.setItem("sentinela.modoVideo", modo);
+    } catch {
+      /* idem */
+    }
+  }
   const [contatos, setContatos] = useState([]);
   const [sensibilidade, setSensibilidade] = useState(null);
   const [nomeCuidador, setNomeCuidador] = useState(armazenamento.nomeCuidador);
@@ -115,6 +152,13 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
     setSensibilidade(resposta.sensibilidade);
   }
 
+  async function renomearCamera(camera) {
+    const nome = window.prompt("Nome da câmera", camera.nome);
+    if (!nome || !nome.trim() || nome.trim() === camera.nome) return;
+    const atualizada = await api.atualizarCamera(camera.id, { nome: nome.trim() });
+    setCameras((atual) => atual.map((c) => (c.id === atualizada.id ? atualizada : c)));
+  }
+
   async function alternarCamera(camera) {
     const atualizada = await api.atualizarCamera(camera.id, { ativa: !camera.ativa });
     setCameras((atual) => atual.map((c) => (c.id === atualizada.id ? atualizada : c)));
@@ -154,6 +198,7 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
         subtitulo={subtitulo}
         estado={estado}
         cameras={cameras}
+        aoSelecionarCamera={selecionarCamera}
         nomeCuidador={nomeExibido}
         rotuloPapel={rotuloPapel}
         aoSair={loginObrigatorio ? aoSair : undefined}
@@ -162,7 +207,18 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
           <Painel
             status={status}
             conectado={conectado}
-            camera={cameras.find((c) => c.id === status?.camera_id)}
+            cameras={cameras}
+            cameraId={cameraId}
+            aoSelecionarCamera={(id) => {
+              setCameraId(id);
+              try {
+                localStorage.setItem("sentinela.camera", String(id));
+              } catch {
+                /* idem */
+              }
+            }}
+            modo={modoVideo}
+            aoMudarModo={mudarModoVideo}
             alertas={alertas}
             aoTratar={tratarAlerta}
           />
@@ -174,6 +230,8 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             aoSalvarSensibilidade={salvarSensibilidade}
             cameras={cameras}
             aoAlternarCamera={alternarCamera}
+            aoRenomearCamera={renomearCamera}
+            estadoCameras={status?.cameras}
             aoAtualizarCamera={(c) => setCameras((atual) => atual.map((x) => (x.id === c.id ? c : x)))}
             contatos={contatos}
             aoCriarContato={criarContato}

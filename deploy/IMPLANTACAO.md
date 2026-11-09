@@ -118,6 +118,10 @@ O **agente** (`agente.py`) roda onde a câmera é alcançável (um computador pe
 painel, por HTTPS, o alerta, uma foto do momento e um quadro por segundo para a tela "ao vivo". O vídeo **não sai**
 do local, e o computador do agente **não precisa** alcançar o banco: com isso dá para fechar a porta 5432.
 
+0. **Pelo painel (mais fácil):** entre como administrador em *Configurações → Agentes de câmera → Adicionar câmera*,
+   dê um nome ao computador e copie as linhas do `.env` que a tela mostra (a chave aparece uma vez). Dá para trocar a
+   chave ou revogar o acesso ali mesmo. Se preferir a linha de comando, siga o passo 1.
+
 1. **Na VPS**, crie a chave do agente (aparece UMA vez; guarde num gerenciador de senhas):
 
 ```bash

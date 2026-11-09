@@ -1,6 +1,6 @@
 /*
  * Painel.jsx - Painel de monitoramento (Figura 10; RF08).
- *   - Vídeo ao vivo com o esqueleto/estado desenhado pelo serviço de visão.
+ *   - Vídeo ao vivo: UMA câmera grande (com seletor) ou GRADE com todas as câmeras ao mesmo tempo.
  *   - Indicadores: câmeras ativas, alertas pendentes, sensibilidade, pessoas em cena.
  *   - Alertas recentes com ação rápida "Resolver".
  */
@@ -21,33 +21,122 @@ function Indicador({ rotulo, valor, Icone, destaque }) {
   );
 }
 
-export function Painel({ status, conectado, camera, alertas, aoTratar }) {
+/** online: true = agente falando; false = sumiu; null = ninguém avisa por ela (computador antigo grava direto no banco). */
+export function rotuloCamera(c) {
+  if (!c) return { texto: "OFFLINE", classe: "" };
+  if (!c.ativa) return { texto: "PAUSADA", classe: "" };
+  if (c.online === true) return { texto: "AO VIVO", classe: "vivo" };
+  if (c.online === false) return { texto: "OFFLINE", classe: "" };
+  return { texto: "SEM AGENTE", classe: "" };
+}
+
+function PontoCamera({ camera }) {
+  const classe = !camera.ativa ? "off" : camera.online === true ? "on" : camera.online === false ? "erro" : "off";
+  return <span className={`ponto ponto--${classe === "on" ? "on" : classe === "erro" ? "queda" : "off"}`} />;
+}
+
+export function Painel({
+  status,
+  conectado,
+  cameras: cameraDoCadastro,
+  cameraId,
+  aoSelecionarCamera,
+  modo,
+  aoMudarModo,
+  alertas,
+  aoTratar,
+}) {
   const [videoDisponivel, setVideoDisponivel] = useState(true);
   const recentes = alertas.slice(0, 6);
-  const online = conectado && status?.camera_online;
-  const pausada = status && !status.camera_ativa;
+  // O status traz o estado de cada câmera; sem ele (servidor antigo), usamos só o cadastro.
+  const estados = status?.cameras?.length
+    ? status.cameras
+    : cameraDoCadastro.map((c) => ({ ...c, online: status?.camera_online ?? null, fps: status?.fps ?? 0, pessoas: status?.pessoas ?? 0 }));
+  const selecionada = estados.find((c) => c.id === cameraId) ?? estados.find((c) => c.id === status?.camera_id) ?? estados[0];
+  const varias = estados.length > 1;
+  const emGrade = varias && modo === "grade";
+  const selo = rotuloCamera(selecionada);
 
   return (
     <div className="grade-painel">
       <section className="cartao cartao--video">
-        <div className="video">
-          {conectado && (
-            <VideoAoVivo alt={`Câmera ao vivo - ${camera?.nome ?? ""}`} aoMudarDisponibilidade={setVideoDisponivel} />
-          )}
-          {(!conectado || !videoDisponivel) && (
-            <div className="video__vazio">
-              <IconeCamera tamanho={32} />
-              <span>{conectado ? "Vídeo indisponível, tentando de novo..." : "Conectando ao serviço de visão..."}</span>
+        {varias && (
+          <div className="seletor-cameras" role="toolbar" aria-label="Câmeras">
+            <div className="seletor-cameras__lista">
+              {estados.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`chip-camera ${!emGrade && selecionada?.id === c.id ? "ativo" : ""}`}
+                  onClick={() => {
+                    aoSelecionarCamera(c.id);
+                    aoMudarModo("uma");
+                  }}
+                  title={c.local || c.nome}
+                >
+                  <PontoCamera camera={c} />
+                  {c.nome}
+                </button>
+              ))}
             </div>
-          )}
-          <span className={`video__selo ${online && !pausada ? "video__selo--vivo" : ""}`}>
-            {pausada ? "PAUSADA" : online ? "AO VIVO" : "OFFLINE"}
-          </span>
-          {camera && <span className="video__camera">{camera.nome}</span>}
-          <span className="video__rodape">
-            Detecção em tempo real · MediaPipe Pose {status ? `· ${Math.round(status.fps)} FPS` : ""}
-          </span>
-        </div>
+            <div className="alternador" role="group" aria-label="Modo de exibição">
+              <button type="button" className={modo !== "grade" ? "ativo" : ""} onClick={() => aoMudarModo("uma")}>
+                Uma
+              </button>
+              <button type="button" className={emGrade ? "ativo" : ""} onClick={() => aoMudarModo("grade")}>
+                Todas
+              </button>
+            </div>
+          </div>
+        )}
+
+        {emGrade ? (
+          <div className="grade-cameras">
+            {estados.map((c) => {
+              const s = rotuloCamera(c);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  className="tile-camera"
+                  onClick={() => {
+                    aoSelecionarCamera(c.id);
+                    aoMudarModo("uma");
+                  }}
+                  title="Clique para ver só esta câmera"
+                >
+                  {conectado && <VideoAoVivo cameraId={c.id} fps={3} alt={`Câmera ${c.nome}`} />}
+                  <span className={`video__selo ${s.classe ? "video__selo--vivo" : ""}`}>{s.texto}</span>
+                  <span className="video__camera">{c.nome}</span>
+                  {c.estado === "alerta" && <span className="tile-camera__alerta">ALERTA</span>}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="video">
+            {conectado && (
+              <VideoAoVivo
+                cameraId={selecionada?.id}
+                alt={`Câmera ao vivo - ${selecionada?.nome ?? ""}`}
+                aoMudarDisponibilidade={setVideoDisponivel}
+              />
+            )}
+            {(!conectado || !videoDisponivel) && (
+              <div className="video__vazio">
+                <IconeCamera tamanho={32} />
+                <span>{conectado ? "Vídeo indisponível, tentando de novo..." : "Conectando ao serviço de visão..."}</span>
+              </div>
+            )}
+            <span className={`video__selo ${conectado && selo.classe ? "video__selo--vivo" : ""}`}>
+              {conectado ? selo.texto : "OFFLINE"}
+            </span>
+            {selecionada && <span className="video__camera">{selecionada.nome}</span>}
+            <span className="video__rodape">
+              Detecção em tempo real · MediaPipe Pose {selecionada?.online ? `· ${Math.round(selecionada.fps)} FPS` : ""}
+            </span>
+          </div>
+        )}
       </section>
 
       <div className="indicadores">
@@ -63,7 +152,11 @@ export function Painel({ status, conectado, camera, alertas, aoTratar }) {
           destaque={status?.pendentes > 0}
         />
         <Indicador rotulo="Sensibilidade" valor={status?.sensibilidade_rotulo ?? "–"} Icone={IconeAtividade} />
-        <Indicador rotulo="Pessoas em cena" valor={status?.pessoas ?? "–"} Icone={IconePessoas} />
+        <Indicador
+          rotulo={emGrade ? "Pessoas em cena (todas)" : "Pessoas em cena"}
+          valor={status ? (emGrade ? estados.reduce((total, c) => total + (c.pessoas || 0), 0) : selecionada?.pessoas ?? status.pessoas ?? 0) : "–"}
+          Icone={IconePessoas}
+        />
       </div>
 
       <section className="cartao cartao--alertas">
