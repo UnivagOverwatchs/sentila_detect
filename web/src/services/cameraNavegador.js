@@ -27,7 +27,8 @@ const STATUS_MS = 3000;
 const CONFIG_MS = 10000;
 const LARGURA = 640;
 const QUALIDADE = 0.65;
-const DETECCAO_MS = 200; // ~5 análises por segundo
+const DETECCAO_MS = 200; // ~5 análises por segundo (se o aparelho for lento, espera mais: ver _passoDeteccao)
+const LARGURA_DETECCAO = 480; // o modelo reduz a imagem para 256 px de qualquer jeito: mandar o vídeo inteiro só gasta processador
 const FOTO_LARGURA = 960;
 const FOTO_QUALIDADE = 0.8;
 const MAX_TENTATIVAS_ALERTA = 6;
@@ -36,10 +37,10 @@ const LIGACOES = [[11, 12], [23, 24], [11, 23], [12, 24], [23, 25], [25, 27], [2
 const GRAVIDADE ={ normal: 0, no_chao: 1, caindo: 1, alerta: 2 };
 
 // deteccao: "desligada" | "carregando" | "ativa" | "indisponivel"
-const PARADA = { fase: "parada", erro: "", nome: "", cameraId: null, assistindo: false, fps: 0, pausada: false, deteccao: "desligada", pessoas: 0, achadas: 0, ultimoAlerta: null };
+const PARADA = { fase: "parada", erro: "", nome: "", cameraId: null, assistindo: false, fps: 0, pausada: false, deteccao: "desligada", processador: "", msDeteccao: 0, pessoas: 0, achadas: 0, ultimoAlerta: null };
 
 /** Carrega o MediaPipe só quando a câmera do aparelho é ligada (o pacote é grande e não vai no carregamento do painel). */
-async function criarPoseLandmarker() {
+async function criarPoseLandmarker(somenteCpu = false) {
   const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
   const arquivos = await FilesetResolver.forVisionTasks("/mediapipe");
   const opcoes = (delegate) => ({
@@ -51,9 +52,11 @@ async function criarPoseLandmarker() {
     minTrackingConfidence: 0.4,
   });
   try {
-    return await PoseLandmarker.createFromOptions(arquivos, opcoes("GPU"));
+    if (somenteCpu) throw new Error("cpu");
+    return { pose: await PoseLandmarker.createFromOptions(arquivos, opcoes("GPU")), processador: "GPU" };
   } catch {
-    return PoseLandmarker.createFromOptions(arquivos, opcoes("CPU")); // aparelho sem GPU compatível
+    // aparelho sem GPU compatível
+    return { pose: await PoseLandmarker.createFromOptions(arquivos, opcoes("CPU")), processador: "CPU" };
   }
 }
 
@@ -111,6 +114,8 @@ class ControladorCamera {
     this._pessoas = [];
     this._pendentes = [];
     this._desenho = null;
+    this._canvasDeteccao = null;
+    this._custoMedio = 0;
     this.inscrever = this.inscrever.bind(this);
     this.obter = this.obter.bind(this);
   }
@@ -155,7 +160,7 @@ class ControladorCamera {
     try {
       // A janela de permissão do navegador aparece aqui.
       this.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: facing, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 15, max: 30 } },
         audio: false,
       });
     } catch (erro) {
@@ -195,14 +200,31 @@ class ControladorCamera {
   async _iniciarDeteccao() {
     this._definir({ deteccao: "carregando" });
     try {
-      const pose = await criarPoseLandmarker();
+      const { pose, processador } = await criarPoseLandmarker();
       if (this._parado) return pose.close();
       this._pose = pose;
-      this._definir({ deteccao: "ativa" });
+      this._definir({ deteccao: "ativa", processador });
       this._laco(() => this._passoDeteccao(), 0);
     } catch {
       // Sem o modelo não há proteção: o status avisa "só vídeo" ao painel.
       if (!this._parado) this._definir({ deteccao: "indisponivel" });
+    }
+  }
+
+  async _trocarParaCpu() {
+    try {
+      const { pose } = await criarPoseLandmarker(true);
+      if (this._parado) return pose.close();
+      const antiga = this._pose;
+      this._pose = pose;
+      antiga?.close();
+      this._custoMedio = 0;
+      this._amostras = 0;
+      this._definir({ processador: "CPU", msDeteccao: 0 });
+    } catch {
+      /* fica na GPU mesmo */
+    } finally {
+      this._trocandoProcessador = false;
     }
   }
 
@@ -225,7 +247,13 @@ class ControladorCamera {
     const inicio = performance.now();
     const largura = v.videoWidth;
     const altura = v.videoHeight;
-    const resultado = this._pose.detectForVideo(v, inicio);
+    // Reduz o quadro antes de analisar: o resultado vem normalizado (0 a 1), então vale para o vídeo original.
+    const cd = this._canvasDeteccao ?? (this._canvasDeteccao = document.createElement("canvas"));
+    const escala = Math.min(1, LARGURA_DETECCAO / largura);
+    cd.width = Math.round(largura * escala);
+    cd.height = Math.round(altura * escala);
+    cd.getContext("2d").drawImage(v, 0, 0, cd.width, cd.height);
+    const resultado = this._pose.detectForVideo(cd, inicio);
     const poses = (resultado.landmarks ?? []).map((pessoa) => pessoa.map((p) => [p.x * largura, p.y * altura, p.visibility ?? 0]));
     const { pessoas, alertas } = this._detectorAtual(largura, altura).processar(poses, inicio / 1000);
     this._pessoas = pessoas;
@@ -237,7 +265,18 @@ class ControladorCamera {
     else if (poses.length !== this.estado.achadas) this._definir({ achadas: poses.length });
 
     for (const alerta of alertas) await this._registrarAlerta(alerta);
-    return Math.max(0, DETECCAO_MS - (performance.now() - inicio));
+    // Aparelho lento: espera o dobro do que a análise levou, para sobrar processador ao envio do vídeo (senão trava).
+    const custo = performance.now() - inicio;
+    this._amostras = (this._amostras ?? 0) + 1;
+    if (this._amostras > 3) this._custoMedio = this._custoMedio ? 0.7 * this._custoMedio + 0.3 * custo : custo; // as 3 primeiras incluem o aquecimento do modelo
+    // A "GPU" do navegador às vezes é emulada por software e fica MUITO mais lenta que a CPU: se passar de 300 ms, troca.
+    if (this.estado.processador === "GPU" && this._amostras >= 8 && this._custoMedio > 300 && !this._trocandoProcessador) {
+      this._trocandoProcessador = true;
+      this._trocarParaCpu();
+    }
+    const ms = Math.round(this._custoMedio);
+    if (Math.abs(ms - this.estado.msDeteccao) >= 5) this._definir({ msDeteccao: ms });
+    return Math.max(DETECCAO_MS - custo, this._custoMedio * 2 - custo, 0);
   }
 
   /** Foto do momento do alerta (quadro inteiro, maior que o do vídeo ao vivo). */
@@ -456,6 +495,9 @@ class ControladorCamera {
     this._detectorDim = "";
     this._pessoas = [];
     this._desenho = null;
+    this._canvasDeteccao = null;
+    this._custoMedio = 0;
+    this._amostras = 0;
     this._pendentes = [];
     this._ultimoTempoVideo = -1;
     try {
