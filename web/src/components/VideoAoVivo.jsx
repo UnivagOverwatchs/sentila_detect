@@ -17,7 +17,7 @@ import { api } from "../services/api.js";
 
 const FALHAS_PARA_AVISAR = 5;
 
-export function VideoAoVivo({ alt, fps = 12, aoMudarDisponibilidade }) {
+export function VideoAoVivo({ alt, fps = 12, cameraId, aoMudarDisponibilidade }) {
   const [src, setSrc] = useState(null);
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export function VideoAoVivo({ alt, fps = 12, aoMudarDisponibilidade }) {
       const inicio = performance.now();
       if (document.visibilityState === "visible") {
         try {
-          const resposta = await fetch(api.urlQuadro(), { cache: "no-store", signal: controle.signal });
+          const resposta = await fetch(api.urlQuadro(cameraId), { cache: "no-store", signal: controle.signal });
           if (!resposta.ok) throw new Error(String(resposta.status));
           const url = URL.createObjectURL(await resposta.blob());
           if (!ativo) return URL.revokeObjectURL(url);
@@ -59,7 +59,7 @@ export function VideoAoVivo({ alt, fps = 12, aoMudarDisponibilidade }) {
       controle.abort();
       urls.forEach((u) => URL.revokeObjectURL(u));
     };
-  }, [fps, aoMudarDisponibilidade]);
+  }, [fps, cameraId, aoMudarDisponibilidade]);
 
   return src ? <img src={src} alt={alt} /> : null;
 }

@@ -33,6 +33,7 @@ Agente de visão (rotas_agente.py): /api/agente/* usa chave própria (Bearer), n
 import asyncio
 import math
 import os
+from datetime import datetime
 from typing import Annotated, Literal, Optional
 from urllib.parse import urlparse
 
@@ -42,6 +43,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import agentes as chaves_de_agente
 from . import autenticacao as auth
 from .banco import Banco
 from .rotas_agente import criar_rotas_agente
@@ -114,6 +116,14 @@ class AtualizarUsuario(BaseModel):
     senha: Optional[str] = Field(default=None, min_length=1, max_length=200)
 
 
+class NovoAgente(BaseModel):
+    nome: str = Field(pattern=r"^[\w .\-]{1,80}$")  # letras, números, espaço, ponto e hífen
+
+
+class AtualizarAgente(BaseModel):
+    ativo: bool
+
+
 class NovoContato(BaseModel):
     nome: str = Field(min_length=1, max_length=120)
     telefone: str = Field(min_length=3, max_length=20, pattern=r"^[0-9+()\-\s]+$")
@@ -125,7 +135,7 @@ ROTAS_PUBLICAS = {"/api/login", "/api/logout", "/api/eu"}
 # CUIDADOR só lê estas áreas; quem altera é o ADMIN.
 ADMIN_SO_ESCRITA = ("/api/configuracao", "/api/cameras", "/api/contatos")
 # Áreas inteiras só do ADMIN.
-ADMIN_TOTAL = ("/api/usuarios", "/api/push/aparelhos", "/api/push/envios")
+ADMIN_TOTAL = ("/api/usuarios", "/api/agentes", "/api/push/aparelhos", "/api/push/envios")
 
 
 AREA_MINIMA_CAMA = 0.02  # fração da imagem: abaixo disso a "cama" é praticamente uma linha
@@ -214,6 +224,7 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
             "cameras_total": len(cameras),
             "sensibilidade": sensibilidade,
             "sensibilidade_rotulo": rotulo_sensibilidade(sensibilidade),
+            "cameras": servico.estado_cameras(),  # a interface monta a grade e o seletor com isto
         }
 
     # ------------------------------------------------------------ status e vídeo
@@ -222,11 +233,11 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         return montar_status()
 
     @app.get("/api/quadro")
-    def quadro_atual():
+    def quadro_atual(camera_id: Optional[int] = None):
         # Requisição curta (abre, entrega 1 JPEG, fecha). O navegador limita ~6 conexões por
         # servidor; um stream contínuo por <img> esgotava esse limite e congelava a interface.
-        return Response(content=servico.jpeg_atual(), media_type="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+        jpeg = servico.jpeg_da_camera(camera_id) if camera_id is not None else servico.jpeg_atual()
+        return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.get("/api/video")
     async def video(request: Request):
@@ -388,6 +399,50 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         if senha_hash or dados.ativo is False or dados.papel:
             banco.encerrar_sessoes_do_usuario(usuario_id)  # nova senha/desativação/novo papel: entra de novo
         return atualizado
+
+    # ------------------------------------------------------------ chaves dos agentes de câmera (só ADMIN)
+    def _agente_por_id(agente_id: int) -> dict:
+        for agente in banco.listar_agentes():
+            if agente["id"] == agente_id:
+                return agente
+        raise HTTPException(404, "Agente não encontrado")
+
+    def _com_tempo(agente: dict) -> dict:
+        """Acrescenta há quantos segundos o agente falou, medido no relógio do próprio servidor (sem ambiguidade de fuso)."""
+        visto = agente.get("ultimo_contato")
+        segundos = None
+        if visto:
+            try:
+                segundos = max(0, int((datetime.now() - datetime.fromisoformat(str(visto))).total_seconds()))
+            except ValueError:
+                segundos = None
+        return {**agente, "ultimo_contato_ha_s": segundos}
+
+    @app.get("/api/agentes")
+    def listar_agentes():
+        return [_com_tempo(a) for a in banco.listar_agentes()]  # nunca inclui a chave: o banco só guarda o hash
+
+    @app.post("/api/agentes", status_code=201)
+    def criar_agente(dados: NovoAgente):
+        nome = dados.nome.strip()
+        if any(a["nome"] == nome for a in banco.listar_agentes()):
+            raise HTTPException(409, "Já existe um agente com esse nome")
+        token = chaves_de_agente.novo_token()
+        agente = banco.criar_agente(nome, chaves_de_agente.hash_token(token))
+        return {**agente, "token": token}  # a ÚNICA vez em que a chave é mostrada
+
+    @app.post("/api/agentes/{agente_id}/nova-chave")
+    def nova_chave_do_agente(agente_id: int):
+        agente = _agente_por_id(agente_id)
+        token = chaves_de_agente.novo_token()
+        banco.trocar_token_do_agente(agente["nome"], chaves_de_agente.hash_token(token))
+        return {**_com_tempo(_agente_por_id(agente_id)), "token": token}  # a chave antiga deixa de valer neste instante
+
+    @app.patch("/api/agentes/{agente_id}")
+    def ativar_ou_revogar_agente(agente_id: int, dados: AtualizarAgente):
+        agente = _agente_por_id(agente_id)
+        banco.definir_agente_ativo(agente["nome"], dados.ativo)
+        return _com_tempo(_agente_por_id(agente_id))
 
     # ------------------------------------------------------------ agentes de visão (só no modo painel)
     if hasattr(servico, "receber_quadro"):

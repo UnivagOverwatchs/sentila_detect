@@ -77,6 +77,11 @@ export const api = {
     requisitar(`/push/aparelhos/${id}`, { method: "PATCH", body: JSON.stringify({ nome }) }),
   removerAparelho: (id) => requisitar(`/push/aparelhos/${id}`, { method: "DELETE" }),
 
-  urlQuadro: () => `${BASE}/quadro`,
+  urlQuadro: (cameraId) => (cameraId == null ? `${BASE}/quadro` : `${BASE}/quadro?camera_id=${cameraId}`),
+
+  agentes: () => requisitar("/agentes"),
+  criarAgente: (nome) => requisitar("/agentes", { method: "POST", body: JSON.stringify({ nome }) }),
+  novaChaveAgente: (id) => requisitar(`/agentes/${id}/nova-chave`, { method: "POST" }),
+  atualizarAgente: (id, ativo) => requisitar(`/agentes/${id}`, { method: "PATCH", body: JSON.stringify({ ativo }) }),
   urlWebSocket: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/ws`,
 };

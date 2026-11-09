@@ -118,6 +118,27 @@ class ServicoVisao:
         with self._lock:
             return self._jpeg
 
+    def jpeg_da_camera(self, camera_id: int) -> bytes:
+        """Quadro de uma câmera específica. Este serviço só tem a própria; as outras mostram o aviso."""
+        if camera_id == self.camera["id"]:
+            return self.jpeg_atual()
+        return self._codificar(quadro_mensagem("Camera em outro computador"))
+
+    def estado_cameras(self) -> list:
+        """Estado de cada câmera cadastrada. Só a deste serviço é conhecida; as demais ficam como 'sem agente'."""
+        meu = self.status()
+        estados = []
+        for cam in self.banco.listar_cameras():
+            if cam["id"] == self.camera["id"]:
+                estados.append({"id": cam["id"], "nome": cam["nome"], "local": cam["local"], "ativa": cam["ativa"],
+                                "online": bool(meu["camera_online"]), "fps": meu.get("fps", 0.0),
+                                "pessoas": meu.get("pessoas", 0), "estado": meu.get("estado", "normal"),
+                                "erro": meu.get("erro"), "visto_ha_s": 0})
+            else:
+                estados.append({"id": cam["id"], "nome": cam["nome"], "local": cam["local"], "ativa": cam["ativa"],
+                                "online": None, "fps": 0.0, "pessoas": 0, "estado": "normal", "erro": None, "visto_ha_s": None})
+        return estados
+
     def status(self) -> Dict[str, Any]:
         with self._lock:
             status = dict(self._status)
@@ -254,6 +275,31 @@ class ServicoRemoto:
 
     def parar(self) -> None:
         pass
+
+    def jpeg_da_camera(self, camera_id: int) -> bytes:
+        """Último quadro enviado pelo agente DESSA câmera (ou o aviso, se ela está sem notícias)."""
+        with self._lock:
+            recente = time.time() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
+            return self._quadros[camera_id] if recente and camera_id in self._quadros else self._placeholder
+
+    def estado_cameras(self) -> list:
+        """Estado de TODAS as câmeras cadastradas, para a interface montar a grade e o seletor."""
+        agora = time.time()
+        estados = []
+        for cam in self.banco.listar_cameras():
+            with self._lock:
+                visto = self._visto.get(cam["id"])
+                recebido = dict(self._status.get(cam["id"], {}))
+            if visto is None:  # nenhum agente falou (ou o computador antigo grava direto no banco)
+                online = None
+            else:
+                online = (agora - visto) < self.AGENTE_ONLINE_S and recebido.get("camera_online", True)
+            estados.append({"id": cam["id"], "nome": cam["nome"], "local": cam["local"], "ativa": cam["ativa"],
+                            "online": online, "fps": recebido.get("fps", 0.0), "pessoas": recebido.get("pessoas", 0),
+                            "estado": recebido.get("estado", "normal") if online else "normal",
+                            "erro": recebido.get("erro") if visto is not None else None,
+                            "visto_ha_s": None if visto is None else int(agora - visto)})
+        return estados
 
     def jpeg_atual(self) -> bytes:
         camera_id = self.camera["id"]
