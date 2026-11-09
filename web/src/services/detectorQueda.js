@@ -35,6 +35,7 @@ export function configPadrao() {
     tronco_min_px: 20.0,
     idade_minima_track: 1.0,
     janela_suavizacao: 0.3,
+    margem_saida: 0.08,
     distancia_max_rastreio: 0.15,
   };
 }
@@ -156,6 +157,7 @@ export class MaquinaEstadosQueda {
     this.ultimaDeitado = -1e9;
     this.ultimoAngulo = 0;
     this.ultimaVelocidade = 0;
+    this.ultimoQuadril = null;
   }
 
   _velocidadeDescida(agora) {
@@ -186,6 +188,7 @@ export class MaquinaEstadosQueda {
     if (medidas) {
       if (this.primeiraObservacao === null) this.primeiraObservacao = agora;
       this.ultimaObservacao = agora;
+      this.ultimoQuadril = medidas.quadril;
       this.historico.push([agora, medidas.quadril[1], medidas.tronco]);
       if (this.historico.length > 300) this.historico.shift();
       this.angulos.push([agora, medidas.angulo]);
@@ -274,6 +277,14 @@ export class DetectorQueda {
     return this.zonasCama.some((z) => pontoEmPoligono(m.quadril, z));
   }
 
+  _saiuDeCena(maq) {
+    if (!maq.ultimoQuadril) return false;
+    const [x, y] = maq.ultimoQuadril;
+    const [l, a] = this.limites;
+    const m = this.cfg.margem_saida;
+    return x < m * l || x > (1 - m) * l || y < m * a; // a borda de baixo não conta: quem cai perto da câmera continua no chão
+  }
+
   processar(poses, agora) {
     const visTronco = Math.max(this.visMin, this.cfg.visibilidade_tronco);
     const validas = [];
@@ -300,6 +311,11 @@ export class DetectorQueda {
     for (const id of [...this.maquinas.keys()]) {
       if (vistos.has(id)) continue;
       const maq = this.maquinas.get(id);
+      if ((maq.estado === ESTADO.CAINDO || maq.estado === ESTADO.NO_CHAO) && this._saiuDeCena(maq)) {
+        this.maquinas.delete(id); // sumiu andando para fora da imagem: não houve queda
+        this.rastreador.remover(id);
+        continue;
+      }
       if (agora - maq.ultimaObservacao > this.cfg.tempo_perda_max) {
         this.maquinas.delete(id);
         this.rastreador.remover(id);

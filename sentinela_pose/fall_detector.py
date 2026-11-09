@@ -195,6 +195,7 @@ class MaquinaEstadosQueda:
     _ultima_deitado: float = -1e9      # última vez que a pose foi vista deitada
     ultimo_angulo: float = 0.0
     ultima_velocidade: float = 0.0
+    ultimo_quadril: Optional[Tuple[float, float]] = None  # onde a pessoa foi vista pela última vez
 
     def _velocidade_descida(self, agora: float) -> float:
         """
@@ -243,6 +244,7 @@ class MaquinaEstadosQueda:
             if self._primeira_observacao is None:
                 self._primeira_observacao = agora
             self._ultima_observacao = agora
+            self.ultimo_quadril = medidas.quadril
             self._historico.append((agora, medidas.quadril[1], medidas.tamanho_tronco))
             self._angulos.append((agora, medidas.angulo_tronco))
             # Mediana do ângulo na janela curta: um quadro "tremido" não muda a postura.
@@ -362,6 +364,16 @@ class DetectorQueda:
     def _na_cama(self, medidas: Medidas) -> bool:
         return any(ponto_em_poligono(medidas.quadril, zona) for zona in self.zonas_cama)
 
+    def _saiu_de_cena(self, maquina: MaquinaEstadosQueda) -> bool:
+        """True se a última posição vista do quadril fica na margem esquerda, direita ou de cima (a de baixo não conta:
+        quem cai perto da câmera pode ser cortado embaixo e continua no chão)."""
+        if maquina.ultimo_quadril is None:
+            return False
+        x, y = maquina.ultimo_quadril
+        largura, altura = self.limites
+        m = self.cfg.margem_saida
+        return x < m * largura or x > (1 - m) * largura or y < m * altura
+
     def processar(self, poses: List[Pose], agora: float) -> Tuple[List[EstadoPessoa], List[EventoAlerta]]:
         # 1. Extrai medidas e descarta poses inválidas: tronco fora da imagem/pouco visível,
         #    quadril acima dos ombros (erro do modelo) ou pessoa pequena demais.
@@ -391,6 +403,11 @@ class DetectorQueda:
             if id_p in vistos:
                 continue
             maquina = self.maquinas[id_p]
+            if maquina.estado in (Estado.CAINDO, Estado.NO_CHAO) and self._saiu_de_cena(maquina):
+                # Sumiu andando para fora da imagem (borda lateral ou de cima): não houve queda.
+                del self.maquinas[id_p]
+                self.rastreador.remover(id_p)
+                continue
             if agora - maquina.ultima_observacao > self.cfg.tempo_perda_max:
                 del self.maquinas[id_p]
                 self.rastreador.remover(id_p)

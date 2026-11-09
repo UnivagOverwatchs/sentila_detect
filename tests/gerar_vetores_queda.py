@@ -134,6 +134,24 @@ def cena_invalidas(rng):
     return quadros
 
 
+def cena_sai_de_cena(rng):
+    """Inclina-se (parece cair) perto da borda esquerda e some da imagem: não pode alertar."""
+    quadros = []
+    for k in range(int(10 * FPS)):
+        t = k / FPS
+        if t < 2:
+            p = [pose((200 - 60 * t / 2, 250), 3, ruido=1.0, rng=rng)]
+        elif t < 2.6:
+            f = (t - 2) / 0.6
+            p = [pose((60 - 30 * f, 250 + 100 * f), 3 + 82 * f, ruido=1.0, rng=rng)]
+        elif t < 3.2:
+            p = [pose((30, 350), 85, ruido=1.0, rng=rng)]
+        else:
+            p = []
+        quadros.append((t, p))
+    return quadros
+
+
 def cena_sensibilidade(rng):
     """Inclinação de ~55°: só alerta com sensibilidade alta."""
     return [(k / FPS, [pose((350, 330), 55, ruido=1.0, rng=rng)]) for k in range(int(16 * FPS))]
@@ -148,6 +166,7 @@ CENAS = [
     ("perde_pessoa", cena_perde_pessoa, 0.65, None),
     ("duas_pessoas", cena_duas_pessoas, 0.65, None),
     ("invalidas", cena_invalidas, 0.65, None),
+    ("sai_de_cena", cena_sai_de_cena, 0.65, None),
     ("sensibilidade_baixa", cena_sensibilidade, 0.1, None),
     ("sensibilidade_alta", cena_sensibilidade, 0.95, None),
 ]
