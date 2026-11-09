@@ -9,6 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { AgentesCamera } from "../components/AgentesCamera.jsx";
+import { CameraDoAparelho } from "../components/CameraDoAparelho.jsx";
 import { EditorCama } from "../components/EditorCama.jsx";
 import { IconeFechar, IconeMais, IconeSino, IconeTelefone } from "../components/Icones.jsx";
 import { api } from "../services/api.js";
@@ -26,6 +27,7 @@ export function Configuracoes({
   cameras,
   aoAlternarCamera,
   aoRenomearCamera,
+  cameraDoAparelho,
   estadoCameras = [],
   aoAtualizarCamera,
   contatos,
@@ -170,6 +172,8 @@ export function Configuracoes({
           computador que alcança a câmera.
         </p>
       </section>
+
+      {admin && cameraDoAparelho && <CameraDoAparelho camera={cameraDoAparelho} />}
 
       {admin && <AgentesCamera />}
 

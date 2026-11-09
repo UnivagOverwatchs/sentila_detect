@@ -2,7 +2,8 @@
 agente.py - Agente de visão do Sentinela: detecta quedas na câmera e envia ao painel (VPS) por HTTPS.
 
 Roda onde a câmera é alcançável (um computador pequeno no local, ou outro lugar com acesso à câmera).
-O vídeo NUNCA sai daqui: só o alerta, uma foto do momento e um quadro por segundo para a tela "ao vivo".
+O vídeo NUNCA é gravado nem enviado inteiro: só o alerta, uma foto do momento e os quadros da tela "ao vivo" (cerca
+de 6 por segundo enquanto alguém assiste no painel; sem espectador, 1 quadro a cada 2 s). AGENTE_FPS_VIDEO muda o ritmo.
 
 Preparação (uma vez), no servidor do painel:
     python -m sentinela_api.agentes criar --nome "Quarto 1"     # mostra a chave UMA vez
@@ -83,7 +84,8 @@ def main() -> None:
                            notificador=NotificadorAlertas(pasta=os.getenv("PASTA_FOTOS", "alertas_queda")))
     if aplicar_sensibilidade_inicial is not None:
         aplicar_sensibilidade(servico.cfg_queda, aplicar_sensibilidade_inicial)
-    sincronizador = Sincronizador(cliente, servico, camera["id"], aplicar_sensibilidade)
+    sincronizador = Sincronizador(cliente, servico, camera["id"], aplicar_sensibilidade,
+                                  fps_video=float(os.getenv("AGENTE_FPS_VIDEO", "6")))
     servico.iniciar()
     sincronizador.iniciar()
     print("[Agente] detectando. Ctrl+C para parar.")

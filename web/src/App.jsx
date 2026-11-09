@@ -19,6 +19,7 @@ import { Historico } from "./pages/Historico.jsx";
 import { Configuracoes } from "./pages/Configuracoes.jsx";
 import { Login } from "./pages/Login.jsx";
 import { useTempoReal } from "./hooks/useTempoReal.js";
+import { useCameraDoNavegador } from "./services/cameraNavegador.js";
 import { api } from "./services/api.js";
 import { armazenamento } from "./services/armazenamento.js";
 import { avisarAlerta, liberarAudio } from "./services/aviso.js";
@@ -38,6 +39,7 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
   const [pagina, setPagina] = useState(paginaDoHash);
   const [alertas, setAlertas] = useState(armazenamento.ultimosAlertas);
   const [cameras, setCameras] = useState([]);
+  const cameraDoAparelho = useCameraDoNavegador(); // a câmera deste aparelho continua ligada ao trocar de tela
   // Qual câmera aparece grande e se o painel mostra uma só ou todas (lembrado neste aparelho).
   const [cameraId, setCameraId] = useState(() => {
     try {
@@ -231,6 +233,7 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             cameras={cameras}
             aoAlternarCamera={alternarCamera}
             aoRenomearCamera={renomearCamera}
+            cameraDoAparelho={cameraDoAparelho}
             estadoCameras={status?.cameras}
             aoAtualizarCamera={(c) => setCameras((atual) => atual.map((x) => (x.id === c.id ? c : x)))}
             contatos={contatos}
@@ -243,6 +246,18 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
           />
         )}
       </Layout>
+
+      {(cameraDoAparelho.fase === "transmitindo" || cameraDoAparelho.fase === "conectando") && (
+        <div className="banner-camera" role="status">
+          <span>
+            Câmera deste aparelho ligada: <strong>{cameraDoAparelho.nome}</strong>
+            {cameraDoAparelho.assistindo ? " · alguém está assistindo" : ""} · só vídeo, sem detecção de queda
+          </span>
+          <button type="button" className="botao botao--pequeno" onClick={cameraDoAparelho.parar}>
+            Parar
+          </button>
+        </div>
+      )}
 
       {alertaAberto && (
         <AlertaTelaCheia

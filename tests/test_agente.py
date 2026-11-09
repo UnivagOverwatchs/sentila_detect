@@ -124,7 +124,7 @@ def test_quadro_e_status_aparecem_no_painel(painel):
     camera = _registrar_camera(cliente, token)
     assert cliente.get("/api/quadro").content != JPEG  # ainda é o aviso "câmera em outro computador"
     r = cliente.post("/api/agente/quadro", params={"camera_id": camera["id"]}, content=JPEG, headers=_cab(token))
-    assert r.status_code == 204
+    assert r.status_code == 200 and r.json() == {"assistindo": True}  # o teste acabou de abrir o vídeo: há espectador
     assert cliente.get("/api/quadro").content == JPEG
     cliente.post("/api/agente/status", headers=_cab(token),
                  json={"camera_id": camera["id"], "fps": 12.5, "pessoas": 2, "estado": "atencao"})

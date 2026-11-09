@@ -11,7 +11,7 @@ Não usa o login por cookie dos usuários: são portas diferentes, com chaves di
     POST /api/agente/camera    registra (ou reencontra) a câmera deste agente
     GET  /api/agente/config    sensibilidade, câmera ligada/desligada e área da cama (o agente consulta de tempos em tempos)
     POST /api/agente/status    fps, pessoas, estado (batimento: mostra "câmera online" no painel)
-    POST /api/agente/quadro    um JPEG para o vídeo ao vivo
+    POST /api/agente/quadro    um JPEG para o vídeo ao vivo; a resposta diz se há espectador ({"assistindo": true})
     POST /api/agente/alertas   alerta + foto; o painel grava, avisa o push e o WhatsApp
 """
 
@@ -46,6 +46,7 @@ class StatusAgente(BaseModel):
     pessoas: int = Field(default=0, ge=0, le=100)
     estado: Literal["normal", "atencao", "alerta"] = "normal"
     camera_online: bool = True
+    deteccao: bool = True  # False = só transmite vídeo (ex.: câmera do navegador na etapa 1): o painel avisa "SÓ VÍDEO"
     erro: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -106,8 +107,9 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
         camera_do_agente(agente, dados.camera_id)
         servico.receber_status(dados.camera_id, dados.model_dump(exclude={"camera_id"}))
 
-    @router.post("/quadro", status_code=204)
+    @router.post("/quadro")
     async def receber_quadro(camera_id: int, request: Request, agente=Depends(autenticar)):
+        """Recebe um quadro e responde se alguém está assistindo: o agente manda ~6 quadros/s só com espectador."""
         camera_do_agente(agente, camera_id)
         corpo = await request.body()
         if len(corpo) > MAX_QUADRO_BYTES:
@@ -115,6 +117,7 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
         if not _e_jpeg(corpo):
             raise HTTPException(422, "O quadro precisa ser um JPEG")
         servico.receber_quadro(camera_id, corpo)
+        return {"assistindo": servico.alguem_assistindo(camera_id)}
 
     @router.post("/alertas", status_code=201)
     def receber_alerta(dados: NovoAlertaAgente, agente=Depends(autenticar)):

@@ -25,6 +25,7 @@ function Indicador({ rotulo, valor, Icone, destaque }) {
 export function rotuloCamera(c) {
   if (!c) return { texto: "OFFLINE", classe: "" };
   if (!c.ativa) return { texto: "PAUSADA", classe: "" };
+  if (c.online === true && c.deteccao === false) return { texto: "SÓ VÍDEO", classe: "vivo" }; // transmite, mas não detecta queda
   if (c.online === true) return { texto: "AO VIVO", classe: "vivo" };
   if (c.online === false) return { texto: "OFFLINE", classe: "" };
   return { texto: "SEM AGENTE", classe: "" };
