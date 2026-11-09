@@ -206,7 +206,8 @@ class ServicoVisao:
                 for evento in alertas:
                     caminho = self.notificador.notificar(evento, tela)
                     confianca = min(evento.angulo_tronco / 90.0, 1.0)  # proxy simples: quão horizontal está o tronco
-                    alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho)
+                    alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho,
+                                                      detalhes={**evento.detalhes, "origem": "computador"})
                     if self.servico_push is not None:
                         self.servico_push.avisar(alerta)  # push para os celulares, mesmo com o app fechado
                     if self.notificador_remoto is not None:

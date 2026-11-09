@@ -264,6 +264,13 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         usuario = getattr(request.state, "usuario", None)
         return banco.tratar_alerta(alerta_id, dados.status, usuario["nome"] if usuario else dados.tratado_por)
 
+    @app.get("/api/alertas/{alerta_id}/detalhes")
+    def detalhes_do_alerta(alerta_id: int):
+        """Números técnicos do momento do alerta (para calibrar os limiares); vazio nos alertas antigos."""
+        if not banco.obter_alerta(alerta_id):
+            raise HTTPException(404, "Alerta não encontrado")
+        return banco.detalhes_do_alerta(alerta_id) or {}
+
     @app.get("/api/alertas/{alerta_id}/imagem")
     def imagem_alerta(alerta_id: int):
         alerta = banco.obter_alerta(alerta_id)

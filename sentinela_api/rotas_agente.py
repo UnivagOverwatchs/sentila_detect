@@ -17,6 +17,7 @@ Não usa o login por cookie dos usuários: são portas diferentes, com chaves di
 
 import base64
 import binascii
+import json
 import os
 import threading
 import time
@@ -32,6 +33,7 @@ from .banco import Banco
 
 MAX_FOTO_BYTES = 2 * 1024 * 1024
 MAX_QUADRO_BYTES = 600 * 1024
+MAX_DETALHES_BYTES = 16 * 1024  # detalhes maiores que isso são ignorados (o alerta sai igual)
 INTERVALO_CONTATO_S = 30  # o "último contato" do agente é gravado no máximo a cada 30 s (o quadro chega a cada 1 s)
 
 
@@ -56,6 +58,7 @@ class NovoAlertaAgente(BaseModel):
     tipo: Literal["queda", "pessoa_no_chao"]
     confianca: float = Field(ge=0.0, le=1.0)
     imagem_jpeg_b64: Optional[str] = Field(default=None, max_length=MAX_FOTO_BYTES * 4 // 3 + 64)
+    detalhes: Optional[Dict[str, Any]] = None  # números do momento do alerta (ângulo, velocidade, trajetória...)
 
 
 def _e_jpeg(dados: bytes) -> bool:
@@ -137,7 +140,8 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
             caminho = os.path.join(pasta_fotos, nome)
             with open(caminho, "wb") as arquivo:
                 arquivo.write(foto)
-        alerta = banco.registrar_alerta(dados.camera_id, dados.track_id, dados.tipo, dados.confianca, caminho)
+        detalhes = dados.detalhes if dados.detalhes and len(json.dumps(dados.detalhes)) <= MAX_DETALHES_BYTES else None
+        alerta = banco.registrar_alerta(dados.camera_id, dados.track_id, dados.tipo, dados.confianca, caminho, detalhes=detalhes)
         if push is not None:
             push.avisar(alerta)
         if notificador_remoto is not None:

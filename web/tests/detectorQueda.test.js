@@ -21,6 +21,14 @@ for (const cena of cenas) {
         assert.equal(a.id, q.alertas[i].id, onde);
         assert.equal(a.tipo, q.alertas[i].tipo, onde);
         perto(a.angulo, q.alertas[i].angulo, `${onde} ângulo do alerta`);
+        const dp = q.alertas[i].detalhes;
+        perto(a.detalhes.angulo, dp.angulo, `${onde} detalhes.angulo`);
+        perto(a.detalhes.velocidade, dp.velocidade, `${onde} detalhes.velocidade`);
+        perto(a.detalhes.tempo_deitado, dp.tempo_deitado, `${onde} detalhes.tempo_deitado`);
+        assert.equal(a.detalhes.pessoas_na_cena, dp.pessoas_na_cena, onde);
+        assert.deepEqual(a.detalhes.limiares, dp.limiares, onde);
+        assert.equal(a.detalhes.trajetoria_angulo.length, dp.trajetoria_angulo.length, onde);
+        assert.equal(a.detalhes.trajetoria_quadril.length, dp.trajetoria_quadril.length, onde);
       });
       assert.equal(pessoas.length, q.pessoas.length, `${onde}: pessoas`);
       pessoas.forEach((p, i) => {

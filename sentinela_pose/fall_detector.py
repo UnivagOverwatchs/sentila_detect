@@ -53,6 +53,7 @@ class EventoAlerta:
     tipo: str            # "queda" ou "pessoa_no_chao"
     timestamp: float
     angulo_tronco: float
+    detalhes: Dict = field(default_factory=dict)  # números do momento, para calibrar os limiares depois
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +315,22 @@ class MaquinaEstadosQueda:
                 self.estado = Estado.NORMAL
         return None
 
+    def detalhes(self, agora: float, pessoas_na_cena: int = 0) -> Dict:
+        """Números do momento do alerta (sem imagem): servem para calibrar os limiares com casos reais."""
+        cfg = self.cfg
+        return {
+            "angulo": round(self.ultimo_angulo, 1),
+            "velocidade": round(self.ultima_velocidade, 3),
+            "tempo_deitado": round(agora - self._inicio_deitado, 2) if self._inicio_deitado is not None else 0.0,
+            "desde_impacto": round(agora - self._ultimo_impacto, 2) if self._ultimo_impacto > -1e8 else None,
+            "pessoas_na_cena": pessoas_na_cena,
+            "limiares": {k: getattr(cfg, k) for k in ("angulo_deitado", "angulo_em_pe", "velocidade_queda",
+                                                      "desnivel_queda_lenta", "tempo_confirma_queda", "tempo_no_chao")},
+            # Últimos ~6 s: [segundos antes do alerta, ângulo do tronco] e [segundos antes, y do quadril, tamanho do tronco].
+            "trajetoria_angulo": [[round(t - agora, 2), round(a, 1)] for t, a in list(self._angulos)[-30:]],
+            "trajetoria_quadril": [[round(t - agora, 2), round(y, 1), round(tr, 1)] for t, y, tr in list(self._historico)[-30:]],
+        }
+
     def _resetar(self) -> None:
         self.estado = Estado.NORMAL
         self._inicio_deitado = None
@@ -394,7 +411,7 @@ class DetectorQueda:
             maquina = self.maquinas.setdefault(id_p, MaquinaEstadosQueda(self.cfg))
             tipo = maquina.atualizar(agora, medidas, self._na_cama(medidas))
             if tipo:
-                alertas.append(EventoAlerta(id_p, tipo, agora, medidas.angulo_tronco))
+                alertas.append(EventoAlerta(id_p, tipo, agora, medidas.angulo_tronco, maquina.detalhes(agora, len(validas))))
             pessoas.append(EstadoPessoa(id_p, maquina.estado, maquina.ultimo_angulo, maquina.ultima_velocidade, pose))
 
         # 3. Pessoas não vistas: avança o tempo (pode disparar alerta se estavam no chão)
@@ -414,7 +431,7 @@ class DetectorQueda:
                 continue
             tipo = maquina.atualizar(agora, None)
             if tipo:
-                alertas.append(EventoAlerta(id_p, tipo, agora, maquina.ultimo_angulo))
+                alertas.append(EventoAlerta(id_p, tipo, agora, maquina.ultimo_angulo, maquina.detalhes(agora, len(validas))))
             if maquina.estado != Estado.NORMAL:
                 pessoas.append(EstadoPessoa(id_p, maquina.estado, maquina.ultimo_angulo, 0.0, None))
 

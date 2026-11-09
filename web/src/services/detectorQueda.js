@@ -248,6 +248,24 @@ export class MaquinaEstadosQueda {
     return null;
   }
 
+  /** Mesmos números do Python (MaquinaEstadosQueda.detalhes): para calibrar os limiares com casos reais. */
+  detalhes(agora, pessoasNaCena = 0) {
+    const cfg = this.cfg;
+    const r = (v, casas) => Math.round(v * 10 ** casas) / 10 ** casas;
+    const limiares = {};
+    for (const k of ["angulo_deitado", "angulo_em_pe", "velocidade_queda", "desnivel_queda_lenta", "tempo_confirma_queda", "tempo_no_chao"]) limiares[k] = cfg[k];
+    return {
+      angulo: r(this.ultimoAngulo, 1),
+      velocidade: r(this.ultimaVelocidade, 3),
+      tempo_deitado: this.inicioDeitado !== null ? r(agora - this.inicioDeitado, 2) : 0,
+      desde_impacto: this.ultimoImpacto > -1e8 ? r(agora - this.ultimoImpacto, 2) : null,
+      pessoas_na_cena: pessoasNaCena,
+      limiares,
+      trajetoria_angulo: this.angulos.slice(-30).map(([t, a]) => [r(t - agora, 2), r(a, 1)]),
+      trajetoria_quadril: this.historico.slice(-30).map(([t, y, tr]) => [r(t - agora, 2), r(y, 1), r(tr, 1)]),
+    };
+  }
+
   _resetar() {
     this.estado = ESTADO.NORMAL;
     this.inicioDeitado = null;
@@ -304,7 +322,7 @@ export class DetectorQueda {
       if (!this.maquinas.has(id)) this.maquinas.set(id, new MaquinaEstadosQueda(this.cfg));
       const maq = this.maquinas.get(id);
       const tipo = maq.atualizar(agora, m, this._naCama(m));
-      if (tipo) alertas.push({ id, tipo, timestamp: agora, angulo: m.angulo });
+      if (tipo) alertas.push({ id, tipo, timestamp: agora, angulo: m.angulo, detalhes: maq.detalhes(agora, validas.length) });
       pessoas.push({ id, estado: maq.estado, angulo: maq.ultimoAngulo, velocidade: maq.ultimaVelocidade, temPose: true, pontos });
     });
 
@@ -322,7 +340,7 @@ export class DetectorQueda {
         continue;
       }
       const tipo = maq.atualizar(agora, null);
-      if (tipo) alertas.push({ id, tipo, timestamp: agora, angulo: maq.ultimoAngulo });
+      if (tipo) alertas.push({ id, tipo, timestamp: agora, angulo: maq.ultimoAngulo, detalhes: maq.detalhes(agora, validas.length) });
       if (maq.estado !== ESTADO.NORMAL) pessoas.push({ id, estado: maq.estado, angulo: maq.ultimoAngulo, velocidade: 0, temPose: false });
     }
     return { pessoas, alertas };

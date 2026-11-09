@@ -264,3 +264,26 @@ def test_excluir_camera_apaga_historico_e_foto_e_mantem_as_outras(painel, tmp_pa
 def test_excluir_camera_que_nao_existe_da_404(painel):
     _, _, cliente, _ = painel
     assert cliente.delete("/api/cameras/99").status_code == 404
+
+
+# ------------------------------------------------------------------ detalhes do alerta (para calibrar limiares)
+def test_alerta_guarda_os_detalhes_e_a_rota_devolve(painel):
+    _, _, cliente, token = painel
+    cam = _camera(cliente, token, "Sala")
+    detalhes = {"angulo": 84.2, "velocidade": 1.9, "origem": "navegador", "trajetoria_angulo": [[-1.0, 20.0], [0.0, 84.2]]}
+    r = cliente.post("/api/agente/alertas", headers=_cab(token),
+                     json={"camera_id": cam, "track_id": 1, "tipo": "queda", "confianca": 0.9, "detalhes": detalhes})
+    assert r.status_code == 201, r.text
+    assert "detalhes" not in r.json()  # a lista pública de alertas não carrega os números
+    assert cliente.get(f"/api/alertas/{r.json()['id']}/detalhes").json() == detalhes
+
+
+def test_alerta_sem_detalhes_ou_com_detalhes_enormes_sai_igual(painel):
+    _, _, cliente, token = painel
+    cam = _camera(cliente, token, "Sala")
+    base = {"camera_id": cam, "track_id": 1, "tipo": "queda", "confianca": 0.9}
+    sem = cliente.post("/api/agente/alertas", headers=_cab(token), json=base).json()
+    enorme = cliente.post("/api/agente/alertas", headers=_cab(token), json={**base, "detalhes": {"lixo": "x" * 20000}}).json()
+    assert cliente.get(f"/api/alertas/{sem['id']}/detalhes").json() == {}
+    assert cliente.get(f"/api/alertas/{enorme['id']}/detalhes").json() == {}  # grande demais: ignorado
+    assert cliente.get("/api/alertas/999/detalhes").status_code == 404

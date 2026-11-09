@@ -69,9 +69,11 @@ class ClienteAgente:
             return True
 
     def enviar_alerta(self, camera_id: int, track_id: int, tipo: str, confianca: float,
-                      jpeg: Optional[bytes]) -> Dict[str, Any]:
+                      jpeg: Optional[bytes], detalhes: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         corpo: Dict[str, Any] = {"camera_id": camera_id, "track_id": track_id, "tipo": tipo,
                                  "confianca": min(max(float(confianca), 0.0), 1.0)}
+        if detalhes:
+            corpo["detalhes"] = detalhes
         if jpeg:
             corpo["imagem_jpeg_b64"] = base64.b64encode(jpeg).decode("ascii")
         return self._chamar("post", "/api/agente/alertas", json=corpo).json()
@@ -93,9 +95,9 @@ class BancoRemoto:
 
     # ---- usado pelo ServicoVisao
     def registrar_alerta(self, camera_id: int, track_id: int, tipo_logica: str, confianca: float,
-                         imagem: Optional[str]) -> Dict[str, Any]:
+                         imagem: Optional[str], detalhes: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         item = {"camera_id": camera_id, "track_id": track_id, "tipo": tipo_logica, "confianca": confianca,
-                "imagem": imagem, "criado_em": time.time()}
+                "imagem": imagem, "detalhes": detalhes, "criado_em": time.time()}
         nome = f"{int(time.time() * 1000):013d}_{uuid.uuid4().hex[:8]}.json"
         temporario = os.path.join(self.pasta_fila, nome + ".tmp")
         with open(temporario, "w", encoding="utf-8") as arquivo:
@@ -133,7 +135,7 @@ class BancoRemoto:
                 with open(item["imagem"], "rb") as foto:
                     jpeg = foto.read()
             try:
-                self.cliente.enviar_alerta(item["camera_id"], item["track_id"], item["tipo"], item["confianca"], jpeg)
+                self.cliente.enviar_alerta(item["camera_id"], item["track_id"], item["tipo"], item["confianca"], jpeg, item.get("detalhes"))
             except ErroDefinitivo as erro:
                 print(f"[Agente] alerta descartado, o painel recusou: {erro}")
             except requests.RequestException as erro:

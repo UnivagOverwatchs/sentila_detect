@@ -31,7 +31,6 @@ const DETECCAO_MS = 200; // ~5 análises por segundo
 const FOTO_LARGURA = 960;
 const FOTO_QUALIDADE = 0.8;
 const MAX_TENTATIVAS_ALERTA = 6;
-const CONFIANCA_ALERTA = 0.9;
 // Ligações do esqueleto (mesmas de sentinela_pose/pontos.py).
 const LIGACOES = [[11, 12], [23, 24], [11, 23], [12, 24], [23, 25], [25, 27], [24, 26], [26, 28], [11, 13], [13, 15], [12, 14], [14, 16]];
 const GRAVIDADE ={ normal: 0, no_chao: 1, caindo: 1, alerta: 2 };
@@ -268,8 +267,9 @@ class ControladorCamera {
         camera_id: this.estado.cameraId,
         track_id: alerta.id,
         tipo: alerta.tipo,
-        confianca: CONFIANCA_ALERTA,
+        confianca: Math.min(Math.max(alerta.angulo / 90, 0), 1), // mesmo critério do agente: quão horizontal está o tronco
         imagem_jpeg_b64: foto,
+        detalhes: { ...alerta.detalhes, origem: "navegador" },
       },
       tentativas: 0,
     };

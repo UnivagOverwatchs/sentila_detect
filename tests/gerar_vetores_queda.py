@@ -187,7 +187,7 @@ def main():
                 "poses": poses,
                 "pessoas": [{"id": p.id_pessoa, "estado": p.estado.value, "angulo": p.angulo_tronco,
                              "velocidade": p.velocidade, "temPose": p.pose is not None} for p in pessoas],
-                "alertas": [{"id": a.id_pessoa, "tipo": a.tipo, "timestamp": a.timestamp, "angulo": a.angulo_tronco} for a in alertas],
+                "alertas": [{"id": a.id_pessoa, "tipo": a.tipo, "timestamp": a.timestamp, "angulo": a.angulo_tronco, "detalhes": a.detalhes} for a in alertas],
             })
         saida.append({"nome": nome, "sensibilidade": sens, "cama": cama, "largura": L, "altura": A, "quadros": quadros})
         total = sum(len(q["alertas"]) for q in quadros)
