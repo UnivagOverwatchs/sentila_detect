@@ -54,6 +54,7 @@ export const api = {
   urlImagemAlerta: (id) => `${BASE}/alertas/${id}/imagem`,
 
   cameras: () => requisitar("/cameras"),
+  excluirCamera: (id) => requisitar(`/cameras/${id}`, { method: "DELETE" }),
   atualizarCamera: (id, dados) =>
     requisitar(`/cameras/${id}`, { method: "PUT", body: JSON.stringify(dados) }),
 

@@ -237,3 +237,30 @@ def test_sincronizador_manda_mais_quadros_com_espectador_do_que_sem(painel):
     assert com >= 15          # ~40 por segundo pedidos: acompanha com folga para a máquina de teste
     assert sem <= 5           # ~3 por segundo: poupa a internet quando ninguém está olhando
     assert com > 3 * sem
+
+
+# ------------------------------------------------------------------ excluir câmera
+def test_excluir_camera_apaga_historico_e_foto_e_mantem_as_outras(painel, tmp_path):
+    banco, servico, cliente, token = painel
+    a, b = _camera(cliente, token, "Sala"), _camera(cliente, token, "Quarto")
+    foto = tmp_path / "fotos" / "a.jpg"
+    foto.parent.mkdir(exist_ok=True)
+    foto.write_bytes(b"x")
+    fora = tmp_path / "fora.jpg"  # fora da pasta de fotos: nunca pode ser apagada
+    fora.write_bytes(b"x")
+    banco.registrar_alerta(a, 1, "queda", 0.9, str(foto))
+    banco.registrar_alerta(a, 2, "queda", 0.9, str(fora))
+    banco.registrar_alerta(b, 1, "queda", 0.9, None)
+    cliente.post("/api/agente/quadro", params={"camera_id": a}, content=JPEG_A, headers=_cab(token))
+
+    assert cliente.delete(f"/api/cameras/{a}").status_code == 204
+    assert [c["id"] for c in cliente.get("/api/cameras").json()] == [b]
+    assert len(cliente.get("/api/alertas").json()) == 1  # só o da outra câmera
+    assert not foto.exists()
+    assert fora.exists()
+    assert a not in servico._quadros
+
+
+def test_excluir_camera_que_nao_existe_da_404(painel):
+    _, _, cliente, _ = painel
+    assert cliente.delete("/api/cameras/99").status_code == 404

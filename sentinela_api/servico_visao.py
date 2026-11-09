@@ -258,6 +258,12 @@ class ServicoRemoto:
             self._visto[camera_id] = time.time()
             self._ultima_camera = camera_id
 
+    def esquecer_camera(self, camera_id: int) -> None:
+        """A câmera foi excluída: some da memória (último quadro, status, espectador)."""
+        with self._lock:
+            for dados in (self._quadros, self._status, self._visto, self._espectador):
+                dados.pop(camera_id, None)
+
     # -------------------------------------------------- lido pela API
     @property
     def camera(self) -> Dict[str, Any]:

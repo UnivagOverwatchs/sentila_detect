@@ -303,6 +303,20 @@ class Banco:
             self._executar(f"UPDATE camera SET {sets} WHERE id = ?", (*permitidos.values(), camera_id))
         return self.obter_camera(camera_id)
 
+    def excluir_camera(self, camera_id: int) -> Optional[List[str]]:
+        """
+        Apaga a câmera E o histórico dela (alertas e eventos). Devolve os caminhos das fotos para quem chamou apagar os
+        arquivos, ou None se a câmera não existe.
+        """
+        if self.obter_camera(camera_id) is None:
+            return None
+        fotos = [l["imagem"] for l in self._consultar(
+            "SELECT imagem FROM evento WHERE camera_id = ? AND imagem IS NOT NULL", (camera_id,))]
+        self._executar("DELETE FROM alerta WHERE evento_id IN (SELECT id FROM evento WHERE camera_id = ?)", (camera_id,))
+        self._executar("DELETE FROM evento WHERE camera_id = ?", (camera_id,))
+        self._executar("DELETE FROM camera WHERE id = ?", (camera_id,))
+        return fotos
+
     # ------------------------------------------------------------ eventos e alertas
     def registrar_alerta(self, camera_id: int, track_id: int, tipo_logica: str,
                          confianca: float, imagem: Optional[str]) -> Dict[str, Any]:
