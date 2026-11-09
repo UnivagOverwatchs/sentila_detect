@@ -369,7 +369,7 @@ class ControladorCamera {
     const ex = largura / d.largura;
     const ey = altura / d.altura;
     ctx.lineWidth = 3;
-    ctx.font = "bold 14px sans-serif";
+    ctx.font = "bold 16px sans-serif";
     for (const { pontos, pessoa } of d.poses) {
       const estado = pessoa?.estado;
       // Verde: em pé/normal. Amarelo: começando a cair (tronco inclinado, descida rápida) ou deitada ainda sem confirmar.
@@ -394,6 +394,9 @@ class ControladorCamera {
       }
       const ancora = [pontos[0], pontos[11], pontos[12]].find((p) => p[2] >= 0.3) ?? pontos[0];
       const texto = pessoa ? `ID${pessoa.id} ${estado.toUpperCase()} ${Math.round(pessoa.angulo)}°` : "TRONCO INCOMPLETO";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "rgba(0,0,0,0.75)"; // contorno escuro para o texto ler em qualquer fundo
+      ctx.strokeText(texto, Math.max(4, ancora[0] * ex - 20), Math.max(16, ancora[1] * ey - 14));
       ctx.fillText(texto, Math.max(4, ancora[0] * ex - 20), Math.max(16, ancora[1] * ey - 14));
     }
   }
@@ -409,7 +412,7 @@ class ControladorCamera {
       json: {
         camera_id: this.estado.cameraId,
         fps,
-        pessoas: this._pessoas.filter((p) => p.temPose).length,
+        pessoas: Math.min(100, this.estado.achadas), // todas as pessoas vistas; só as de tronco inteiro são avaliadas para queda
         estado: this._estadoGeral(),
         camera_online: true,
         deteccao: this.estado.deteccao === "ativa",
