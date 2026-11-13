@@ -30,6 +30,7 @@ from sentinela_api.app import criar_app  # noqa: E402
 from sentinela_api.banco import Banco  # noqa: E402
 from sentinela_api.notificador_remoto import NotificadorRemoto  # noqa: E402
 from sentinela_api.push import ServicoPush  # noqa: E402
+from sentinela_api.vigia import VigiaCameras  # noqa: E402
 from sentinela_api.servico_visao import ServicoRemoto, ServicoVisao  # noqa: E402
 
 PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
@@ -100,6 +101,8 @@ def main() -> None:
     else:
         servico = ServicoVisao(banco, camera, args.fonte, servico_push=push, notificador_remoto=whatsapp)
     servico.iniciar()
+    vigia = VigiaCameras(banco, servico, push, whatsapp)  # modo painel: avisa câmera sem sinal (push e WhatsApp)
+    vigia.iniciar()
 
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):
         print("[Sentinela] Interface não compilada. Rode:  cd web && npm install && npm run build")

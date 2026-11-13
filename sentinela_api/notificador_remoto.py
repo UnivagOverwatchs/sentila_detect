@@ -47,3 +47,17 @@ class NotificadorRemoto:
         except requests.RequestException as erro:
             print(f"[WhatsApp] notificador indisponível ({erro.__class__.__name__}); "
                   f"o alerta {alerta_id} será enviado na próxima verificação do banco")
+
+    def avisar_texto(self, texto: str) -> None:
+        """Aviso que não é alerta de queda (ex.: câmera sem sinal): POST /aviso no notificador, em segundo plano."""
+        if self.configurado:
+            threading.Thread(target=self._post_texto, args=(texto,), daemon=True).start()
+
+    def _post_texto(self, texto: str) -> None:
+        try:
+            resposta = self._enviar(f"{self.url}/aviso", json={"texto": texto[:500]},
+                                    headers={"Authorization": f"Bearer {self.token}"}, timeout=TIMEOUT_S)
+            if resposta.status_code != 202:
+                print(f"[WhatsApp] notificador respondeu {resposta.status_code} ao aviso")
+        except requests.RequestException as erro:
+            print(f"[WhatsApp] notificador indisponível para o aviso ({erro.__class__.__name__})")

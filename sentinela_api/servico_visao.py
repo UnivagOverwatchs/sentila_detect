@@ -259,6 +259,12 @@ class ServicoRemoto:
             self._visto[camera_id] = time.time()
             self._ultima_camera = camera_id
 
+    def vistos_ha_s(self) -> Dict[int, float]:
+        """Há quantos segundos cada câmera mandou notícia (só as que já falaram alguma vez)."""
+        agora = time.time()
+        with self._lock:
+            return {camera_id: agora - visto for camera_id, visto in self._visto.items()}
+
     def esquecer_camera(self, camera_id: int) -> None:
         """A câmera foi excluída: some da memória (último quadro, status, espectador)."""
         with self._lock:

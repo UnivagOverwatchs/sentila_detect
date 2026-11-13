@@ -95,13 +95,22 @@ class ServicoPush:
             return
         threading.Thread(target=self._enviar_para_todos, args=(alerta,), daemon=True).start()
 
+    def avisar_texto(self, titulo: str, corpo: str, tag: str) -> None:
+        """Aviso que não é alerta de queda (ex.: câmera sem sinal). `tag` evita empilhar avisos iguais no celular."""
+        if not self.configurado:
+            return
+        mensagem = json.dumps({"titulo": titulo, "corpo": corpo, "alerta_id": None, "tag": tag})
+        threading.Thread(target=self._enviar_mensagem, args=(mensagem, None), daemon=True).start()
+
     def _enviar_para_todos(self, alerta: Dict[str, Any]) -> None:
         mensagem = json.dumps({
             "titulo": _TITULOS.get(alerta["tipo"], "Alerta"),
             "corpo": f"{alerta['camera_nome']} · agora",
             "alerta_id": alerta["id"],
         })
-        alerta_id = alerta["id"] if isinstance(alerta["id"], int) else None
+        self._enviar_mensagem(mensagem, alerta["id"] if isinstance(alerta["id"], int) else None)
+
+    def _enviar_mensagem(self, mensagem: str, alerta_id: Optional[int]) -> None:
         assinaturas = self.banco.listar_assinaturas()
         if not assinaturas:
             return

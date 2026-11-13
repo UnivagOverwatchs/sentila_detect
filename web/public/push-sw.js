@@ -15,7 +15,7 @@ self.addEventListener("push", (evento) => {
       body: dados.corpo || "",
       icon: "/icone.svg",
       badge: "/icone.svg",
-      tag: `alerta-${dados.alerta_id ?? "novo"}`,
+      tag: dados.tag || `alerta-${dados.alerta_id ?? "novo"}`, // avisos de câmera usam a própria tag
       requireInteraction: true,
       vibrate: [400, 150, 400, 150, 400],
       data: { url: "/" },
