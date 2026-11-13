@@ -235,6 +235,7 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             aoMudarModo={mudarModoVideo}
             alertas={alertas}
             aoTratar={tratarAlerta}
+            cameraDoAparelho={cameraDoAparelho}
           />
         )}
         {pagina === "historico" && <Historico alertas={alertas} aoTratar={tratarAlerta} offline={offline} />}

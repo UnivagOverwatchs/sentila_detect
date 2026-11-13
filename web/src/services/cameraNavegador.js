@@ -16,6 +16,10 @@
  * Ao parar, os quadros cessam, a câmera do aparelho é liberada e a chave do agente é revogada.
  *
  * Limites do navegador: a tela precisa ficar ligada e a página aberta (mantemos a tela acesa com o Wake Lock).
+ *
+ * VISÃO LOCAL ("espelho"): neste aparelho a imagem é mostrada direto da câmera (componente VideoLocal), em alta
+ * resolução e sem atraso, com o esqueleto desenhado por cima (desenharSobreposicao). O que vai para o painel continua
+ * reduzido (LARGURA/QUALIDADE) para não pesar na rede: só quem está aqui vê a imagem cheia.
  */
 import { useSyncExternalStore } from "react";
 import { api } from "./api.js";
@@ -28,7 +32,9 @@ const STATUS_MS = 3000;
 const CONFIG_MS = 10000;
 const LARGURA = 640;
 const QUALIDADE = 0.65;
-const DETECCAO_MS = 200; // ~5 análises por segundo (se o aparelho for lento, espera mais: ver _passoDeteccao)
+const DETECCAO_MS = 100; // até ~10 análises por segundo, a câmera está aqui mesmo (aparelho lento espera mais: ver _passoDeteccao)
+// Pedido à câmera: o máximo útil para a visão local. Os quadros enviados ao painel são reduzidos para LARGURA.
+const RESOLUCAO_LOCAL = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } };
 const LARGURA_DETECCAO = 480; // o modelo reduz a imagem para 256 px de qualquer jeito: mandar o vídeo inteiro só gasta processador
 const FOTO_LARGURA = 960;
 const FOTO_QUALIDADE = 0.8;
@@ -40,7 +46,7 @@ const LIGACOES = [[11, 12], [23, 24], [11, 23], [12, 24], [23, 25], [25, 27], [2
 const GRAVIDADE ={ normal: 0, no_chao: 1, caindo: 1, alerta: 2 };
 
 // deteccao: "desligada" | "carregando" | "ativa" | "indisponivel"
-const PARADA = { fase: "parada", erro: "", nome: "", cameraId: null, assistindo: false, fps: 0, pausada: false, deteccao: "desligada", processador: "", msDeteccao: 0, pessoas: 0, achadas: 0, ultimoAlerta: null };
+const PARADA = { fase: "parada", erro: "", nome: "", cameraId: null, facing: "user", assistindo: false, fps: 0, pausada: false, deteccao: "desligada", processador: "", msDeteccao: 0, pessoas: 0, achadas: 0, ultimoAlerta: null };
 
 /** Carrega o MediaPipe só quando a câmera do aparelho é ligada (o pacote é grande e não vai no carregamento do painel). */
 async function criarPoseLandmarker(somenteCpu = false) {
@@ -184,11 +190,11 @@ class ControladorCamera {
   async iniciar({ nome, local = "", facing = "user" }) {
     if (!["parada", "erro"].includes(this.estado.fase)) return;
     nome = nome.trim() || "Câmera do aparelho";
-    this._definir({ ...PARADA, fase: "pedindo", nome });
+    this._definir({ ...PARADA, fase: "pedindo", nome, facing });
     try {
       // A janela de permissão do navegador aparece aqui.
       this.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 15, max: 30 } },
+        video: { facingMode: facing, ...RESOLUCAO_LOCAL },
         audio: false,
       });
     } catch (erro) {
@@ -415,7 +421,14 @@ class ControladorCamera {
    * Verde = pessoa normal; amarelo = caindo (inclinando/descendo rápido) ou deitada sem confirmar; vermelho = queda confirmada; cinza = pessoa vista, mas SEM o tronco inteiro
    * na imagem (ombros ou quadris cortados): o detector não consegue avaliar e não conta essa pessoa.
    */
-  _desenharEsqueletos(ctx, largura, altura, momentoDoAlerta = false) {
+  /** Visão local: limpa o canvas transparente e desenha só o esqueleto (o vídeo fica no <video> embaixo). */
+  desenharSobreposicao(ctx, largura, altura, espelhar = false) {
+    ctx.clearRect(0, 0, largura, altura);
+    this._desenharEsqueletos(ctx, largura, altura, false, espelhar);
+  }
+
+  // espelhar: a câmera frontal é mostrada como espelho; os pontos trocam de lado, mas o texto continua legível.
+  _desenharEsqueletos(ctx, largura, altura, momentoDoAlerta = false, espelhar = false) {
     const d = this._desenho;
     if (!d || this.estado.deteccao !== "ativa") return;
     if (momentoDoAlerta) {
@@ -430,6 +443,7 @@ class ControladorCamera {
     }
     const ex = largura / d.largura;
     const ey = altura / d.altura;
+    const px = (x) => (espelhar ? largura - x * ex : x * ex); // posição horizontal na tela (já espelhada se for o caso)
     ctx.lineWidth = 3;
     ctx.font = "bold 16px sans-serif";
     for (const { pontos, pessoa } of d.poses) {
@@ -444,22 +458,22 @@ class ControladorCamera {
       for (const [a, b] of LIGACOES) {
         if (pontos[a][2] < 0.3 || pontos[b][2] < 0.3) continue;
         ctx.beginPath();
-        ctx.moveTo(pontos[a][0] * ex, pontos[a][1] * ey);
-        ctx.lineTo(pontos[b][0] * ex, pontos[b][1] * ey);
+        ctx.moveTo(px(pontos[a][0]), pontos[a][1] * ey);
+        ctx.lineTo(px(pontos[b][0]), pontos[b][1] * ey);
         ctx.stroke();
       }
       for (const i of [0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]) {
         if (pontos[i][2] < 0.3) continue;
         ctx.beginPath();
-        ctx.arc(pontos[i][0] * ex, pontos[i][1] * ey, 4, 0, 2 * Math.PI);
+        ctx.arc(px(pontos[i][0]), pontos[i][1] * ey, 4, 0, 2 * Math.PI);
         ctx.fill();
       }
       const ancora = [pontos[0], pontos[11], pontos[12]].find((p) => p[2] >= 0.3) ?? pontos[0];
       const texto = pessoa ? `ID${pessoa.id} ${estado.toUpperCase()} ${Math.round(pessoa.angulo)}°` : "TRONCO INCOMPLETO";
       ctx.lineWidth = 4;
       ctx.strokeStyle = "rgba(0,0,0,0.75)"; // contorno escuro para o texto ler em qualquer fundo
-      ctx.strokeText(texto, Math.max(4, ancora[0] * ex - 20), Math.max(16, ancora[1] * ey - 14));
-      ctx.fillText(texto, Math.max(4, ancora[0] * ex - 20), Math.max(16, ancora[1] * ey - 14));
+      ctx.strokeText(texto, Math.max(4, px(ancora[0]) - 20), Math.max(16, ancora[1] * ey - 14));
+      ctx.fillText(texto, Math.max(4, px(ancora[0]) - 20), Math.max(16, ancora[1] * ey - 14));
     }
   }
 
@@ -556,5 +570,6 @@ export function useCameraDoNavegador() {
     stream: controladorCamera.stream,
     iniciar: (opcoes) => controladorCamera.iniciar(opcoes),
     parar: () => controladorCamera.parar(),
+    desenharSobreposicao: (ctx, largura, altura, espelhar) => controladorCamera.desenharSobreposicao(ctx, largura, altura, espelhar),
   };
 }

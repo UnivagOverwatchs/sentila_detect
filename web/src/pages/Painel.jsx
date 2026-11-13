@@ -6,6 +6,7 @@
  */
 import { useState } from "react";
 import { VideoAoVivo } from "../components/VideoAoVivo.jsx";
+import { VideoLocal } from "../components/VideoLocal.jsx";
 import { dia, hora, TITULO_TIPO } from "../services/formato.js";
 import { IconeAtividade, IconeCamera, IconeCheck, IconePessoas, IconeSino } from "../components/Icones.jsx";
 
@@ -46,8 +47,11 @@ export function Painel({
   aoMudarModo,
   alertas,
   aoTratar,
+  cameraDoAparelho,
 }) {
   const [videoDisponivel, setVideoDisponivel] = useState(true);
+  // Câmera deste aparelho: mostra direto da câmera (resolução cheia, sem atraso) em vez de buscar no servidor.
+  const ehLocal = (c) => cameraDoAparelho?.fase === "transmitindo" && c?.id != null && cameraDoAparelho.cameraId === c.id;
   const recentes = alertas.slice(0, 6);
   // O status traz o estado de cada câmera; sem ele (servidor antigo), usamos só o cadastro.
   const estados = status?.cameras?.length
@@ -106,7 +110,11 @@ export function Painel({
                   }}
                   title="Clique para ver só esta câmera"
                 >
-                  {conectado && <VideoAoVivo cameraId={c.id} fps={3} alt={`Câmera ${c.nome}`} />}
+                  {ehLocal(c) ? (
+                    <VideoLocal camera={cameraDoAparelho} esqueleto={false} />
+                  ) : (
+                    conectado && <VideoAoVivo cameraId={c.id} fps={3} alt={`Câmera ${c.nome}`} />
+                  )}
                   <span className={`video__selo ${s.classe ? "video__selo--vivo" : ""}`}>{s.texto}</span>
                   <span className="video__camera">{c.nome}</span>
                   {c.estado === "alerta" && <span className="tile-camera__alerta">ALERTA</span>}
@@ -116,14 +124,16 @@ export function Painel({
           </div>
         ) : (
           <div className="video">
-            {conectado && (
+            {ehLocal(selecionada) ? (
+              <VideoLocal camera={cameraDoAparelho} />
+            ) : conectado && (
               <VideoAoVivo
                 cameraId={selecionada?.id}
                 alt={`Câmera ao vivo - ${selecionada?.nome ?? ""}`}
                 aoMudarDisponibilidade={setVideoDisponivel}
               />
             )}
-            {(!conectado || !videoDisponivel) && (
+            {!ehLocal(selecionada) && (!conectado || !videoDisponivel) && (
               <div className="video__vazio">
                 <IconeCamera tamanho={32} />
                 <span>{conectado ? "Vídeo indisponível, tentando de novo..." : "Conectando ao serviço de visão..."}</span>
@@ -132,7 +142,12 @@ export function Painel({
             <span className={`video__selo ${conectado && selo.classe ? "video__selo--vivo" : ""}`}>
               {conectado ? selo.texto : "OFFLINE"}
             </span>
-            {selecionada && <span className="video__camera">{selecionada.nome}</span>}
+            {selecionada && (
+              <span className="video__camera">
+                {selecionada.nome}
+                {ehLocal(selecionada) && " · este aparelho (sem atraso)"}
+              </span>
+            )}
             <span className="video__rodape">
               Detecção em tempo real · MediaPipe Pose {selecionada?.online ? `· ${Math.round(selecionada.fps)} FPS` : ""}
             </span>
