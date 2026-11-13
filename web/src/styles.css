@@ -1001,7 +1001,9 @@ p {
   }
   .nav-inferior {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    /* uma coluna por aba, qualquer que seja o número de abas */
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
     position: fixed;
     bottom: 0;
     left: 0;
@@ -1370,4 +1372,386 @@ p {
   color: #fff;
   font-size: 13px;
   box-shadow: var(--sombra);
+}
+
+/* ---------------------------------------------------------------------------
+   Página "Câmeras" (pages/Cameras.jsx): resumo, assistente e cartões de câmera
+   --------------------------------------------------------------------------- */
+.botao--perigo {
+  color: var(--perigo);
+  border-color: var(--perigo-suave);
+}
+.botao--perigo:hover:not(:disabled) {
+  background: var(--perigo-suave);
+}
+.resumo-cameras {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.resumo-cameras__numeros {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+.resumo-cameras__numeros div {
+  display: flex;
+  flex-direction: column;
+}
+.resumo-cameras__numeros strong {
+  font-size: 24px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.resumo-cameras__numeros span {
+  color: var(--texto-2);
+  font-size: 13px;
+}
+.resumo--ok strong {
+  color: var(--ok);
+}
+.resumo--erro strong {
+  color: var(--perigo);
+}
+
+.lista-cameras {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cartao-camera {
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-p);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cartao-camera__linha {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cartao-camera__info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cartao-camera__titulo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cartao-camera__titulo strong {
+  font-size: 15px;
+}
+.cartao-camera small {
+  color: var(--texto-2);
+  font-size: 12.5px;
+}
+.cartao-camera__acoes {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.selo-camera {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.selo-camera--on {
+  background: var(--ok-suave);
+  color: var(--ok);
+}
+.selo-camera--atencao {
+  background: var(--atencao-suave);
+  color: var(--atencao);
+}
+.selo-camera--erro {
+  background: var(--perigo-suave);
+  color: var(--perigo);
+}
+.selo-camera--off {
+  background: var(--fundo);
+  color: var(--texto-2);
+}
+
+.form-camera {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.form-camera label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--texto-2);
+}
+.form-camera input,
+.form-camera select {
+  padding: 8px 10px;
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-p);
+  background: var(--superficie);
+  font: inherit;
+  font-weight: 400;
+  color: var(--texto);
+  min-width: 0;
+}
+.form-camera label small {
+  font-weight: 400;
+  color: var(--texto-3);
+}
+.form-camera .linha-botoes,
+.form-camera .erro {
+  grid-column: 1 / -1;
+}
+.form-camera .erro {
+  margin: 0;
+  color: var(--perigo);
+  font-size: 13px;
+}
+
+.assistente__cabecalho {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.opcoes-camera {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.opcao-camera {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 16px;
+  text-align: left;
+  font: inherit;
+  color: var(--texto);
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  cursor: pointer;
+}
+.opcao-camera svg {
+  color: var(--primaria);
+}
+.opcao-camera span {
+  color: var(--texto-2);
+  font-size: 13px;
+}
+.opcao-camera:hover,
+.opcao-camera:focus-visible {
+  border-color: var(--primaria);
+  background: var(--primaria-suave);
+}
+.espera-camera {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--texto-2);
+  font-weight: 600;
+}
+.espera-camera--ok {
+  color: var(--ok);
+}
+.camera-aparelho {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .form-camera,
+  .opcoes-camera {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Tela "Monitor" (pages/Monitor.jsx): letras grandes, uma cor por situação
+   --------------------------------------------------------------------------- */
+.monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.monitor--cheia {
+  background: var(--fundo);
+  padding: 24px;
+  overflow: auto;
+}
+.faixa-monitor {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  border-radius: var(--raio);
+  color: #fff;
+}
+.faixa-monitor p {
+  margin: 0;
+}
+.faixa-monitor__texto {
+  font-size: clamp(22px, 3vw, 34px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.faixa-monitor__sub {
+  opacity: 0.9;
+  font-size: 15px;
+}
+.faixa-monitor__direita {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.faixa-monitor__relogio {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.faixa-monitor--ok {
+  background: var(--ok);
+}
+.faixa-monitor--alerta {
+  background: var(--perigo);
+  animation: pulso-monitor 1.2s ease-in-out infinite;
+}
+.faixa-monitor--off {
+  background: #5b6778;
+}
+
+.grade-monitor {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.quadro-monitor {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--raio);
+  border: 2px solid transparent;
+  padding: 18px;
+  min-height: 320px;
+  color: #fff;
+}
+.quadro-monitor__camera {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 18px;
+}
+.quadro-monitor__camera span {
+  opacity: 0.85;
+  font-size: 14px;
+}
+.quadro-monitor__corpo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  padding: 10px 0;
+}
+.quadro-monitor__figura {
+  flex: none;
+}
+.quadro-monitor__foto {
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: var(--raio-p);
+  border: 3px solid rgba(255, 255, 255, 0.8);
+}
+.quadro-monitor__titulo {
+  margin: 4px 0 0;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+.quadro-monitor__detalhe {
+  margin: 0;
+  font-size: 15px;
+  opacity: 0.9;
+}
+.quadro-monitor__acoes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.quadro-monitor__acoes .botao {
+  justify-content: center;
+  padding: 12px;
+  font-size: 16px;
+}
+.quadro-monitor--ok {
+  background: var(--ok-suave);
+  border-color: #b9e6cf;
+  color: var(--ok);
+}
+.quadro-monitor--atencao {
+  background: var(--atencao-suave);
+  border-color: #f3d58c;
+  color: #9a6200;
+}
+.quadro-monitor--sem-sinal {
+  background: var(--superficie);
+  border-color: var(--borda);
+  color: var(--texto-2);
+}
+.quadro-monitor--queda,
+.quadro-monitor--chao {
+  background: var(--perigo);
+  border-color: var(--perigo);
+  animation: pulso-monitor 1.2s ease-in-out infinite;
+}
+.quadro-monitor--queda .quadro-monitor__figura,
+.quadro-monitor--chao .quadro-monitor__figura {
+  animation: tremor-queda 0.6s ease-in-out infinite;
+}
+@keyframes pulso-monitor {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(211, 47, 60, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 14px rgba(211, 47, 60, 0);
+  }
+}
+@keyframes tremor-queda {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-6deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .faixa-monitor--alerta,
+  .quadro-monitor--queda,
+  .quadro-monitor--chao,
+  .quadro-monitor__figura {
+    animation: none !important;
+  }
 }

@@ -7,7 +7,7 @@
  * 2. Abre o WebSocket (useTempoReal): recebe o status a cada 1 s e os alertas na hora.
  * 3. Alerta novo -> entra na fila e abre a TELA CHEIA vermelha + som + vibração + notificação.
  * 4. Tratar alerta (Resolver/Falso alarme) -> PATCH na API, sai da fila, lista atualiza.
- * 5. Navegação por hash (#/painel, #/historico, #/config): funciona offline e
+ * 5. Navegação por hash (#/painel, #/monitor, #/historico, #/cameras, #/config): funciona offline e
  *    sem configurar rotas no servidor.
  * 6. Sem conexão: mostra os últimos alertas salvos no aparelho (RF15).
  */
@@ -16,6 +16,8 @@ import { Layout } from "./components/Layout.jsx";
 import { AlertaTelaCheia } from "./components/AlertaTelaCheia.jsx";
 import { Painel } from "./pages/Painel.jsx";
 import { Historico } from "./pages/Historico.jsx";
+import { Cameras } from "./pages/Cameras.jsx";
+import { Monitor } from "./pages/Monitor.jsx";
 import { Configuracoes } from "./pages/Configuracoes.jsx";
 import { Login } from "./pages/Login.jsx";
 import { useTempoReal } from "./hooks/useTempoReal.js";
@@ -26,8 +28,10 @@ import { avisarAlerta, liberarAudio } from "./services/aviso.js";
 
 const TITULOS = {
   painel: ["Painel de monitoramento", "Visão em tempo real dos ambientes"],
+  monitor: ["Monitor", "Os idosos estão bem? Tela para deixar aberta na TV"],
   historico: ["Histórico de alertas", "Eventos detectados e seu status"],
-  config: ["Configurações", "Sensibilidade, câmeras e contatos de emergência"],
+  cameras: ["Câmeras", "Adicionar, editar e acompanhar as câmeras"],
+  config: ["Configurações", "Sensibilidade, contatos, usuários e aparelhos"],
 };
 
 function paginaDoHash() {
@@ -124,6 +128,15 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
 
   const { status, conectado } = useTempoReal(aoReceberAlerta);
 
+  // Câmera nova (agente ou navegador acabou de conectar): o tempo real já a lista, mas o cadastro ainda não.
+  // Recarrega as câmeras para ela aparecer na lista, na barra lateral e no painel sem precisar atualizar a página.
+  const totalNoTempoReal = status?.cameras?.length ?? 0;
+  useEffect(() => {
+    if (totalNoTempoReal > cameras.length) {
+      api.cameras().then(setCameras).catch(() => {});
+    }
+  }, [totalNoTempoReal, cameras.length]);
+
   // Ao reconectar (servidor reiniciado, Wi-Fi voltou), recarrega tudo.
   useEffect(() => {
     if (conectado) carregarTudo();
@@ -154,17 +167,16 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
     setSensibilidade(resposta.sensibilidade);
   }
 
-  async function renomearCamera(camera) {
-    const nome = window.prompt("Nome da câmera", camera.nome);
-    if (!nome || !nome.trim() || nome.trim() === camera.nome) return;
-    const atualizada = await api.atualizarCamera(camera.id, { nome: nome.trim() });
+  // Edição no próprio cartão da câmera (nome e local). Erro sobe para o cartão mostrar a mensagem.
+  async function salvarCamera(camera, dados) {
+    const atualizada = await api.atualizarCamera(camera.id, dados);
     setCameras((atual) => atual.map((c) => (c.id === atualizada.id ? atualizada : c)));
   }
 
   async function excluirCamera(camera) {
     const ok = window.confirm(
       `Excluir a câmera "${camera.nome}"?\n\nIsso apaga também TODOS os alertas e fotos dela e não dá para desfazer.\n` +
-        "Se um agente ainda estiver ligado a ela, revogue a chave dele em 'Agentes de câmera' para a câmera não voltar sozinha.\n" +
+        "Se um agente ainda estiver ligado a ela, feche o agente ou revogue o computador em 'Computadores com agente'; senão a câmera volta sozinha.\n" +
         "Para só parar de monitorar, use o interruptor.",
     );
     if (!ok) return;
@@ -237,18 +249,26 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             aoTratar={tratarAlerta}
           />
         )}
+        {pagina === "monitor" && (
+          <Monitor cameras={cameras} estadoCameras={status?.cameras} alertas={alertas} aoTratar={tratarAlerta} conectado={conectado} />
+        )}
         {pagina === "historico" && <Historico alertas={alertas} aoTratar={tratarAlerta} offline={offline} />}
+        {pagina === "cameras" && (
+          <Cameras
+            cameras={cameras}
+            estadoCameras={status?.cameras}
+            cameraDoAparelho={cameraDoAparelho}
+            admin={admin}
+            aoSalvarCamera={salvarCamera}
+            aoAlternarCamera={alternarCamera}
+            aoExcluirCamera={excluirCamera}
+            aoAtualizarCamera={(c) => setCameras((atual) => atual.map((x) => (x.id === c.id ? c : x)))}
+          />
+        )}
         {pagina === "config" && (
           <Configuracoes
             sensibilidade={sensibilidade}
             aoSalvarSensibilidade={salvarSensibilidade}
-            cameras={cameras}
-            aoAlternarCamera={alternarCamera}
-            aoRenomearCamera={renomearCamera}
-            aoExcluirCamera={excluirCamera}
-            cameraDoAparelho={cameraDoAparelho}
-            estadoCameras={status?.cameras}
-            aoAtualizarCamera={(c) => setCameras((atual) => atual.map((x) => (x.id === c.id ? c : x)))}
             contatos={contatos}
             aoCriarContato={criarContato}
             aoRemoverContato={removerContato}
@@ -275,7 +295,8 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
         </div>
       )}
 
-      {alertaAberto && (
+      {/* Na tela Monitor o próprio quadro da câmera fica vermelho (som e notificação continuam). */}
+      {alertaAberto && pagina !== "monitor" && (
         <AlertaTelaCheia
           alerta={alertaAberto}
           contatoEmergencia={contatos[0]}

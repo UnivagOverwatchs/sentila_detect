@@ -1,16 +1,13 @@
 /*
  * Configuracoes.jsx - Configurações (Figura 12; UC09, RF11).
  *   - Sensibilidade de detecção (um controle que ajusta todos os limiares no servidor).
- *   - Câmeras cadastradas: ligar/desligar o monitoramento.
+ *   (Câmeras e computadores com agente ficam na página "Câmeras", em pages/Cameras.jsx.)
  *   - Contatos de emergência: usados no botão "Ligar" da tela de alerta.
  *   - Este aparelho: nome do cuidador e permissão de notificações.
  *   - Usuários (só administrador): criar, ativar/desativar e trocar a senha.
  *   - Aparelhos que recebem alertas: lista dos celulares cadastrados para o push (renomear/remover).
  */
 import { useEffect, useState } from "react";
-import { AgentesCamera } from "../components/AgentesCamera.jsx";
-import { CameraDoAparelho } from "../components/CameraDoAparelho.jsx";
-import { EditorCama } from "../components/EditorCama.jsx";
 import { IconeFechar, IconeMais, IconeSino, IconeTelefone } from "../components/Icones.jsx";
 import { api } from "../services/api.js";
 import { pedirPermissaoNotificacao } from "../services/aviso.js";
@@ -24,13 +21,6 @@ function rotuloNivel(valor) {
 export function Configuracoes({
   sensibilidade,
   aoSalvarSensibilidade,
-  cameras,
-  aoAlternarCamera,
-  aoRenomearCamera,
-  aoExcluirCamera,
-  cameraDoAparelho,
-  estadoCameras = [],
-  aoAtualizarCamera,
   contatos,
   aoCriarContato,
   aoRemoverContato,
@@ -45,7 +35,6 @@ export function Configuracoes({
   const [erroContato, setErroContato] = useState("");
   const [pushEstado, setPushEstado] = useState("");
   const [aparelhos, setAparelhos] = useState([]);
-  const [editandoCama, setEditandoCama] = useState(null); // id da câmera cuja cama está sendo marcada
 
   async function carregarAparelhos() {
     if (!admin) return;
@@ -124,64 +113,10 @@ export function Configuracoes({
         </div>
       </section>
 
-      <section className="cartao">
-        <header className="cartao__cabecalho">
-          <h2>Câmeras cadastradas</h2>
-        </header>
-        <ul className="lista-config">
-          {cameras.map((c) => (
-            <li key={c.id}>
-              <div className="lista-config__expande">
-                <strong>{c.nome}</strong>
-                <small>
-                  {c.local}
-                  {(() => {
-                    const e = estadoCameras.find((x) => x.id === c.id);
-                    if (!e) return "";
-                    const quando = e.visto_ha_s == null ? "" : ` · último sinal ${e.visto_ha_s < 90 ? "agora há pouco" : `há ${Math.round(e.visto_ha_s / 60)} min`}`;
-                    return ` · ${e.online === true ? "online" : e.online === false ? "offline" : "sem agente"}${quando}`;
-                  })()}
-                </small>
-              </div>
-              {admin && (
-                <button type="button" className="botao botao--pequeno botao--fantasma" onClick={() => aoRenomearCamera?.(c)}>
-                  Renomear
-                </button>
-              )}
-              {admin && (
-                <button
-                  type="button"
-                  className="botao botao--pequeno botao--fantasma"
-                  onClick={() => setEditandoCama(editandoCama === c.id ? null : c.id)}
-                >
-                  {c.area_cama?.length ? "Editar cama" : "Marcar cama"}
-                </button>
-              )}
-              {admin && (
-                <button type="button" className="botao botao--pequeno botao--fantasma" onClick={() => aoExcluirCamera?.(c)}>
-                  Excluir
-                </button>
-              )}
-              <label className="interruptor" title={c.ativa ? "Monitorando: clique para desativar" : "Desativada: clique para ativar"}>
-                <input type="checkbox" checked={c.ativa} disabled={!admin} onChange={() => aoAlternarCamera(c)} />
-                <span aria-hidden="true" />
-                <span className="sr-only">Monitorar {c.nome}</span>
-              </label>
-              {editandoCama === c.id && (
-                <EditorCama camera={c} aoSalvar={aoAtualizarCamera} aoFechar={() => setEditandoCama(null)} />
-              )}
-            </li>
-          ))}
-        </ul>
-        <p className="dica">
-          Para adicionar uma câmera, crie um agente em <strong>Agentes de câmera</strong>, logo abaixo, e rode o <code>agente.py</code> no
-          computador que alcança a câmera.
-        </p>
-      </section>
+      <p className="dica">
+        Câmeras e computadores com agente agora ficam na aba <a href="#/cameras">Câmeras</a>.
+      </p>
 
-      {admin && cameraDoAparelho && <CameraDoAparelho camera={cameraDoAparelho} />}
-
-      {admin && <AgentesCamera />}
 
       <section className="cartao">
         <header className="cartao__cabecalho">
