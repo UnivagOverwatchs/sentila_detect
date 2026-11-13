@@ -4,11 +4,12 @@
  *   - Celular: a barra lateral some e aparece a navegação inferior (Figura 13).
  *   - Topo: título da tela + selo de estado geral (Normal / Atenção / Alerta).
  */
-import { IconeAjustes, IconeCasa, IconeEscudo, IconeRelogio } from "./Icones.jsx";
+import { IconeAjustes, IconeCamera, IconeCasa, IconeEscudo, IconeRelogio } from "./Icones.jsx";
 
 const PAGINAS = [
   { id: "painel", rotulo: "Painel", Icone: IconeCasa },
   { id: "historico", rotulo: "Histórico", Icone: IconeRelogio },
+  { id: "cameras", rotulo: "Câmeras", Icone: IconeCamera },
   { id: "config", rotulo: "Configurações", rotuloCurto: "Config", Icone: IconeAjustes },
 ];
 
