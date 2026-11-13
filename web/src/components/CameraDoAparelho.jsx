@@ -10,7 +10,7 @@ import { IconeCamera } from "./Icones.jsx";
 import { VideoLocal } from "./VideoLocal.jsx";
 import { nomeDoAparelho } from "../services/push.js";
 
-export function CameraDoAparelho({ camera }) {
+export function CameraDoAparelho({ camera, embutida = false }) {
   const [nome, setNome] = useState(`Câmera ${nomeDoAparelho()}`);
   const [local, setLocal] = useState("");
   const [facing, setFacing] = useState("user");
@@ -18,12 +18,18 @@ export function CameraDoAparelho({ camera }) {
   const ligada = fase === "transmitindo";
   const ocupada = fase === "pedindo" || fase === "conectando";
 
+  // "embutida": dentro do assistente "Adicionar câmera" (sem cartão nem título próprios).
+  const Envoltorio = embutida ? "div" : "section";
   return (
-    <section className="cartao">
-      <header className="cartao__cabecalho">
-        <h2>Usar a câmera deste aparelho</h2>
-        <p>O celular ou o computador vira uma câmera do sistema, com vídeo ao vivo no painel. O navegador vai pedir a permissão.</p>
-      </header>
+    <Envoltorio className={embutida ? "camera-aparelho" : "cartao"}>
+      {embutida ? (
+        <p className="dica">O navegador vai pedir permissão para usar a câmera. O vídeo aparece ao vivo no painel.</p>
+      ) : (
+        <header className="cartao__cabecalho">
+          <h2>Câmera deste aparelho</h2>
+          <p>Este celular ou computador está funcionando como câmera do sistema.</p>
+        </header>
+      )}
 
       {!suportado ? (
         <p className="erro">Este navegador não permite usar a câmera (precisa de HTTPS e de um navegador atual).</p>
@@ -80,6 +86,6 @@ export function CameraDoAparelho({ camera }) {
         navegador for para segundo plano). A queda é detectada <b>neste aparelho</b>: ele precisa estar parado, com a câmera
         apontada para o ambiente e com boa luz. Para vigiar de forma contínua, prefira uma câmera fixa com o agente.
       </div>
-    </section>
+    </Envoltorio>
   );
 }
