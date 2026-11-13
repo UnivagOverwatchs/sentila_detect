@@ -15,6 +15,7 @@ Não usa o login por cookie dos usuários: são portas diferentes, com chaves di
     POST /api/agente/alertas   alerta + foto; o painel grava, avisa o push e o WhatsApp
 """
 
+import asyncio
 import base64
 import binascii
 import json
@@ -35,6 +36,9 @@ MAX_FOTO_BYTES = 2 * 1024 * 1024
 MAX_QUADRO_BYTES = 600 * 1024
 MAX_DETALHES_BYTES = 16 * 1024  # detalhes maiores que isso são ignorados (o alerta sai igual)
 INTERVALO_CONTATO_S = 30  # o "último contato" do agente é gravado no máximo a cada 30 s (o quadro chega a cada 1 s)
+# A chave e o dono de cada câmera são lembrados por alguns segundos: o vídeo (até 8 quadros/s por câmera) não consulta
+# o banco a cada quadro. Revogar uma chave vale em no máximo CACHE_AGENTE_S segundos (alertas também revalidam).
+CACHE_AGENTE_S = 10.0
 
 
 class RegistrarCamera(BaseModel):
@@ -71,11 +75,26 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
     os.makedirs(pasta_fotos, exist_ok=True)
     ultimo_contato: Dict[int, float] = {}
     lock = threading.Lock()
+    agentes_em_cache: Dict[str, tuple] = {}   # hash da chave -> (agente ou None, validade)
+    donos_em_cache: Dict[int, tuple] = {}     # camera_id -> (url_stream, câmera, validade)
 
-    def autenticar(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    def _agente_da_chave(token_hash: str, usar_cache: bool = True) -> Optional[Dict[str, Any]]:
+        agora = time.monotonic()
+        with lock:
+            item = agentes_em_cache.get(token_hash)
+        if usar_cache and item and item[1] > agora:
+            return item[0]
+        agente = banco.obter_agente_por_token(token_hash)
+        with lock:
+            if len(agentes_em_cache) > 1000:
+                agentes_em_cache.clear()
+            agentes_em_cache[token_hash] = (agente, agora + CACHE_AGENTE_S)
+        return agente
+
+    def _autenticar(authorization: Optional[str], usar_cache: bool) -> Dict[str, Any]:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(401, "Chave do agente ausente")
-        agente = banco.obter_agente_por_token(hash_token(authorization[7:].strip()))
+        agente = _agente_da_chave(hash_token(authorization[7:].strip()), usar_cache)
         if agente is None:
             raise HTTPException(401, "Chave do agente inválida ou revogada")
         agora = time.monotonic()
@@ -87,16 +106,31 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
             banco.registrar_contato_agente(agente["id"])
         return agente
 
-    def camera_do_agente(agente: Dict[str, Any], camera_id: int) -> Dict[str, Any]:
+    def autenticar(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        return _autenticar(authorization, usar_cache=True)
+
+    def autenticar_sem_cache(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        """Para registrar câmera e ALERTA: sempre confere no banco (revogação vale na hora)."""
+        return _autenticar(authorization, usar_cache=False)
+
+    def camera_do_agente(agente: Dict[str, Any], camera_id: int, usar_cache: bool = False) -> Dict[str, Any]:
         """Um agente só mexe nas câmeras que ele mesmo registrou."""
-        camera = banco.obter_camera(camera_id)
-        origem = banco.url_stream_da_camera(camera_id) or ""
+        agora = time.monotonic()
+        with lock:
+            item = donos_em_cache.get(camera_id)
+        if usar_cache and item and item[2] > agora:
+            origem, camera = item[0], item[1]
+        else:
+            camera = banco.obter_camera(camera_id)
+            origem = banco.url_stream_da_camera(camera_id) or ""
+            with lock:
+                donos_em_cache[camera_id] = (origem, camera, agora + CACHE_AGENTE_S)
         if camera is None or not origem.startswith(f"agente:{agente['id']}:"):
             raise HTTPException(404, "Câmera não encontrada para este agente")
         return camera
 
     @router.post("/camera")
-    def registrar_camera(dados: RegistrarCamera, agente=Depends(autenticar)):
+    def registrar_camera(dados: RegistrarCamera, agente=Depends(autenticar_sem_cache)):
         camera = banco.garantir_camera(dados.nome.strip(), dados.local.strip(), f"agente:{agente['id']}:{dados.nome.strip()}")
         return {**banco.obter_camera(camera["id"]), "sensibilidade": banco.obter_sensibilidade()}
 
@@ -112,8 +146,14 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
 
     @router.post("/quadro")
     async def receber_quadro(camera_id: int, request: Request, agente=Depends(autenticar)):
-        """Recebe um quadro e responde se alguém está assistindo: o agente manda ~6 quadros/s só com espectador."""
-        camera_do_agente(agente, camera_id)
+        """Recebe um quadro e responde se alguém está assistindo: o agente manda ~6 quadros/s só com espectador.
+
+        Esta rota é async (precisa ler o corpo). Tudo que toca o banco roda em outra thread (asyncio.to_thread):
+        antes, as consultas rodavam direto no loop da API e cada quadro travava o painel inteiro durante a ida ao banco.
+        """
+        if int(request.headers.get("content-length") or 0) > MAX_QUADRO_BYTES:
+            raise HTTPException(413, "Quadro grande demais")  # recusa antes de ler o corpo para a memória
+        await asyncio.to_thread(camera_do_agente, agente, camera_id, True)
         corpo = await request.body()
         if len(corpo) > MAX_QUADRO_BYTES:
             raise HTTPException(413, "Quadro grande demais")
@@ -123,7 +163,7 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
         return {"assistindo": servico.alguem_assistindo(camera_id)}
 
     @router.post("/alertas", status_code=201)
-    def receber_alerta(dados: NovoAlertaAgente, agente=Depends(autenticar)):
+    def receber_alerta(dados: NovoAlertaAgente, agente=Depends(autenticar_sem_cache)):
         camera_do_agente(agente, dados.camera_id)
         caminho = None
         if dados.imagem_jpeg_b64:
@@ -148,4 +188,11 @@ def criar_rotas_agente(banco: Banco, servico, push=None, notificador_remoto=None
             notificador_remoto.avisar(alerta)
         return alerta
 
+    def esquecer_chaves() -> None:
+        """Chamado quando uma chave é revogada/trocada pela tela: a mudança vale na hora, sem esperar o cache."""
+        with lock:
+            agentes_em_cache.clear()
+            donos_em_cache.clear()
+
+    router.esquecer_chaves = esquecer_chaves
     return router

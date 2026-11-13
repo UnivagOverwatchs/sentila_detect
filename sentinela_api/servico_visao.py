@@ -11,6 +11,8 @@ Captura e estimador são INJETÁVEIS (parâmetros criar_captura/criar_estimador)
 nos testes trocamos por versões falsas, sem câmera nem MediaPipe.
 """
 
+import logging
+import queue
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
@@ -24,7 +26,10 @@ from sentinela_pose.fall_detector import DetectorQueda, Estado
 
 from .banco import Banco
 
+log = logging.getLogger("sentinela.visao")
+
 LARGURA, ALTURA = 640, 360
+# Intervalos medidos com time.monotonic(): um ajuste de relógio (NTP, horário de verão) não gera "câmera offline" falso.
 QUALIDADE_JPEG = 75          # equilíbrio entre nitidez e banda no Wi-Fi da instituição
 CAMERA_OFFLINE_APOS_S = 3.0  # sem quadros por esse tempo = câmera offline
 
@@ -96,6 +101,10 @@ class ServicoVisao:
         self._rodando = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        # Alertas vão para uma fila e são gravados por outra thread: o laço de vídeo nunca espera o banco
+        # (antes, um banco remoto lento congelava a detecção justamente na hora da queda).
+        self._fila_alertas: "queue.Queue[tuple]" = queue.Queue()
+        self._gravador: Optional[threading.Thread] = None
         self._jpeg: bytes = self._codificar(quadro_mensagem("Iniciando camera..."))
         self._status: Dict[str, Any] = {"fps": 0.0, "pessoas": 0, "estado": "normal",
                                         "camera_online": False, "erro": None}
@@ -106,12 +115,17 @@ class ServicoVisao:
         self._rodando = True
         self._thread = threading.Thread(target=self._loop_seguro, name="servico-visao", daemon=True)
         self._thread.start()
+        self._gravador = threading.Thread(target=self._gravar_alertas, name="gravador-alertas", daemon=True)
+        self._gravador.start()
 
     def parar(self) -> None:
         """Pode ser chamado mais de uma vez (Ctrl+C e bloco finally)."""
         self._rodando = False
         if self._thread and self._thread.is_alive() and self._thread is not threading.current_thread():
             self._thread.join(timeout=3)
+        if self._gravador and self._gravador.is_alive():
+            self._fila_alertas.put(None)  # acorda o gravador para terminar (depois de gravar o que estiver na fila)
+            self._gravador.join(timeout=5)
 
     # ------------------------------------------------------------ leitura pela API
     def jpeg_atual(self) -> bytes:
@@ -142,7 +156,7 @@ class ServicoVisao:
     def status(self) -> Dict[str, Any]:
         with self._lock:
             status = dict(self._status)
-        status["camera_online"] = (time.time() - self._ultimo_quadro_em) < CAMERA_OFFLINE_APOS_S
+        status["camera_online"] = (time.monotonic() - self._ultimo_quadro_em) < CAMERA_OFFLINE_APOS_S
         status["camera_ativa"] = self.ativa
         status["camera_id"] = self.camera["id"]  # a PWA usa para mostrar o nome da câmera certa
         return status
@@ -172,7 +186,7 @@ class ServicoVisao:
         captura = self._criar_captura(self.fonte)
         estimador = self._criar_estimador(self.cfg_pose)
         detector = DetectorQueda(LARGURA, ALTURA, self.cfg_queda, self.cfg_pose)
-        t_anterior, fps = time.time(), 0.0
+        t_anterior, fps = time.monotonic(), 0.0
 
         try:
             while self._rodando and captura.rodando:
@@ -180,7 +194,7 @@ class ServicoVisao:
                 if quadro is None:
                     time.sleep(0.005)
                     continue
-                agora = time.time()
+                agora = time.monotonic()
                 self._ultimo_quadro_em = agora
 
                 # Câmera desligada pelo gestor: não processa (economiza CPU) e mostra aviso.
@@ -206,12 +220,9 @@ class ServicoVisao:
                 for evento in alertas:
                     caminho = self.notificador.notificar(evento, tela)
                     confianca = min(evento.angulo_tronco / 90.0, 1.0)  # proxy simples: quão horizontal está o tronco
-                    alerta = self.banco.registrar_alerta(self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho,
-                                                      detalhes={**evento.detalhes, "origem": "computador"})
-                    if self.servico_push is not None:
-                        self.servico_push.avisar(alerta)  # push para os celulares, mesmo com o app fechado
-                    if self.notificador_remoto is not None:
-                        self.notificador_remoto.avisar(alerta)  # WhatsApp para os contatos (outro servidor)
+                    # Só enfileira: quem grava no banco e avisa push/WhatsApp é o gravador (_gravar_alertas).
+                    self._fila_alertas.put((self.camera["id"], evento.id_pessoa, evento.tipo, confianca, caminho,
+                                            {**evento.detalhes, "origem": "computador"}))
 
                 estados = {p.estado for p in pessoas}
                 estado_geral = ("alerta" if Estado.ALERTA in estados
@@ -221,6 +232,30 @@ class ServicoVisao:
         finally:
             captura.fechar()
             estimador.fechar()
+
+
+    def _gravar_alertas(self) -> None:
+        """Grava cada alerta da fila no banco e avisa push/WhatsApp. Banco fora do ar: tenta de novo, sem perder."""
+        while True:
+            item = self._fila_alertas.get()
+            if item is None:
+                if self._fila_alertas.empty():
+                    return
+                continue
+            espera = 1.0
+            while True:
+                try:
+                    camera_id, pessoa, tipo, confianca, caminho, detalhes = item
+                    alerta = self.banco.registrar_alerta(camera_id, pessoa, tipo, confianca, caminho, detalhes=detalhes)
+                    break
+                except Exception:  # noqa: BLE001 - banco fora do ar: o alerta não pode se perder
+                    log.exception("Falha ao gravar alerta; nova tentativa em %.0f s", espera)
+                    time.sleep(espera)
+                    espera = min(espera * 2, 30.0)
+            if self.servico_push is not None:
+                self.servico_push.avisar(alerta)  # push para os celulares, mesmo com o app fechado
+            if self.notificador_remoto is not None:
+                self.notificador_remoto.avisar(alerta)  # WhatsApp para os contatos (outro servidor)
 
 
 class ServicoRemoto:
@@ -250,14 +285,20 @@ class ServicoRemoto:
     def receber_quadro(self, camera_id: int, jpeg: bytes) -> None:
         with self._lock:
             self._quadros[camera_id] = jpeg
-            self._visto[camera_id] = time.time()
+            self._visto[camera_id] = time.monotonic()
             self._ultima_camera = camera_id
 
     def receber_status(self, camera_id: int, status: Dict[str, Any]) -> None:
         with self._lock:
             self._status[camera_id] = dict(status)
-            self._visto[camera_id] = time.time()
+            self._visto[camera_id] = time.monotonic()
             self._ultima_camera = camera_id
+
+    def vistos_ha_s(self) -> Dict[int, float]:
+        """Há quantos segundos cada câmera mandou notícia (só as que já falaram alguma vez)."""
+        agora = time.monotonic()
+        with self._lock:
+            return {camera_id: agora - visto for camera_id, visto in self._visto.items()}
 
     def esquecer_camera(self, camera_id: int) -> None:
         """A câmera foi excluída: some da memória (último quadro, status, espectador)."""
@@ -288,18 +329,18 @@ class ServicoRemoto:
 
     def alguem_assistindo(self, camera_id: int) -> bool:
         with self._lock:
-            return time.time() - self._espectador.get(camera_id, 0.0) < self.ESPECTADOR_S
+            return time.monotonic() - self._espectador.get(camera_id, 0.0) < self.ESPECTADOR_S
 
     def jpeg_da_camera(self, camera_id: int) -> bytes:
         """Último quadro enviado pelo agente DESSA câmera (ou o aviso, se ela está sem notícias)."""
         with self._lock:
-            self._espectador[camera_id] = time.time()
-            recente = time.time() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
+            self._espectador[camera_id] = time.monotonic()
+            recente = time.monotonic() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
             return self._quadros[camera_id] if recente and camera_id in self._quadros else self._placeholder
 
     def estado_cameras(self) -> list:
         """Estado de TODAS as câmeras cadastradas, para a interface montar a grade e o seletor."""
-        agora = time.time()
+        agora = time.monotonic()
         estados = []
         for cam in self.banco.listar_cameras():
             with self._lock:
@@ -320,8 +361,8 @@ class ServicoRemoto:
     def jpeg_atual(self) -> bytes:
         camera_id = self.camera["id"]
         with self._lock:
-            self._espectador[camera_id] = time.time()
-            recente = time.time() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
+            self._espectador[camera_id] = time.monotonic()
+            recente = time.monotonic() - self._visto.get(camera_id, 0.0) < self.AGENTE_ONLINE_S
             return self._quadros[camera_id] if recente and camera_id in self._quadros else self._placeholder
 
     def status(self) -> Dict[str, Any]:
@@ -333,7 +374,7 @@ class ServicoRemoto:
             # Nenhum agente falou ainda (ou o computador antigo grava direto no banco): não acusar câmera offline.
             return {"fps": 0.0, "pessoas": 0, "estado": "normal", "erro": None, "camera_online": True,
                     "camera_ativa": True, "camera_id": camera_id, "modo": "painel"}
-        online = (time.time() - visto) < self.AGENTE_ONLINE_S and recebido.get("camera_online", True)
+        online = (time.monotonic() - visto) < self.AGENTE_ONLINE_S and recebido.get("camera_online", True)
         return {"fps": recebido.get("fps", 0.0), "pessoas": recebido.get("pessoas", 0),
                 "estado": recebido.get("estado", "normal") if online else "normal",
                 "erro": recebido.get("erro"), "camera_online": online, "camera_ativa": True,

@@ -30,6 +30,9 @@ from sentinela_api.app import criar_app  # noqa: E402
 from sentinela_api.banco import Banco  # noqa: E402
 from sentinela_api.notificador_remoto import NotificadorRemoto  # noqa: E402
 from sentinela_api.push import ServicoPush  # noqa: E402
+from sentinela_api.manutencao import RotinaDiaria  # noqa: E402
+from sentinela_api.registro import configurar_logs  # noqa: E402
+from sentinela_api.vigia import VigiaCameras  # noqa: E402
 from sentinela_api.servico_visao import ServicoRemoto, ServicoVisao  # noqa: E402
 
 PASTA_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "dist")
@@ -79,7 +82,18 @@ def main() -> None:
                         help="modo painel: só API, interface, login e push (sem câmera nem detecção). "
                              "Usado na VPS; a detecção roda em outro computador que grava no mesmo banco")
     args = parser.parse_args()
+    configurar_logs()
 
+    exigir_login = os.getenv("LOGIN_OBRIGATORIO", "0") == "1"
+    # Conferido ANTES de conectar no banco: uma configuração insegura não chega a tocar em nada.
+    if not exigir_login and args.host not in ("127.0.0.1", "localhost", "::1"):
+        # Sem login, qualquer um na rede poderia criar usuários, chaves de agente e apagar câmeras.
+        if os.getenv("PERMITIR_REDE_SEM_LOGIN", "0") != "1":
+            print("[Sentinela] RECUSADO: --host abre o painel na rede e o login está desligado.\n"
+                  "            Defina LOGIN_OBRIGATORIO=1 no .env (recomendado) ou, só para teste numa rede\n"
+                  "            confiável, PERMITIR_REDE_SEM_LOGIN=1.")
+            raise SystemExit(2)
+        print("[Sentinela] ATENÇÃO: acessível pela rede e SEM login (PERMITIR_REDE_SEM_LOGIN=1).")
     banco = Banco(args.banco)  # PostgreSQL se o .env tiver DATABASE_URL/PGHOST; senão SQLite local
     print(f"[Sentinela] Banco de dados: {banco.descricao}")
     camera = None if args.painel else banco.garantir_camera(args.camera, args.local, args.fonte)
@@ -100,18 +114,18 @@ def main() -> None:
     else:
         servico = ServicoVisao(banco, camera, args.fonte, servico_push=push, notificador_remoto=whatsapp)
     servico.iniciar()
+    vigia = VigiaCameras(banco, servico, push, whatsapp)  # modo painel: avisa câmera sem sinal (push e WhatsApp)
+    vigia.iniciar()
+    RotinaDiaria(banco, os.getenv("PASTA_FOTOS", "alertas_queda")).iniciar()  # retenção LGPD + sessões vencidas
 
     if not os.path.exists(os.path.join(PASTA_WEB, "index.html")):
         print("[Sentinela] Interface não compilada. Rode:  cd web && npm install && npm run build")
 
-    exigir_login = os.getenv("LOGIN_OBRIGATORIO", "0") == "1"
     # Cookie "Secure" só vai por HTTPS (ou localhost); com login ativo, é o padrão.
     cookie_seguro = os.getenv("COOKIE_SEGURO", "1" if exigir_login else "0") == "1"
     if exigir_login and banco.contar_usuarios() == 0:
         print("[Sentinela] ATENÇÃO: login obrigatório, mas não há usuários. Crie o administrador com:\n"
               "            python -m sentinela_api.usuarios criar --usuario admin --nome Administrador --papel ADMIN")
-    if not exigir_login and args.host != "127.0.0.1":
-        print("[Sentinela] ATENÇÃO: acessível pela rede e SEM login. Defina LOGIN_OBRIGATORIO=1 no .env.")
     print(f"[Sentinela] Abra http://{'localhost' if args.host == '127.0.0.1' else args.host}:{args.porta}")
     config = uvicorn.Config(criar_app(banco, servico, PASTA_WEB, push, exigir_login=exigir_login,
                                       cookie_seguro=cookie_seguro,

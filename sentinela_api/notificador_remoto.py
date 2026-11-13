@@ -13,6 +13,7 @@ verificação do banco (a cada poucos segundos). Por isso uma falha aqui só ger
 Configuração (.env): NOTIFICADOR_URL=http://servidor-whatsapp:8100  e  NOTIFICADOR_TOKEN=<o mesmo NOTIF_TOKEN do notificador>
 """
 
+import logging
 import os
 import threading
 from typing import Any, Callable, Dict, Optional
@@ -20,6 +21,8 @@ from typing import Any, Callable, Dict, Optional
 import requests
 
 TIMEOUT_S = 5
+
+log = logging.getLogger("sentinela.whatsapp")
 
 
 class NotificadorRemoto:
@@ -43,7 +46,21 @@ class NotificadorRemoto:
             resposta = self._enviar(f"{self.url}/notificar", json={"alerta_id": alerta_id},
                                     headers={"Authorization": f"Bearer {self.token}"}, timeout=TIMEOUT_S)
             if resposta.status_code != 202:
-                print(f"[WhatsApp] notificador respondeu {resposta.status_code} para o alerta {alerta_id}")
+                log.warning("Notificador respondeu %s para o alerta %s", resposta.status_code, alerta_id)
         except requests.RequestException as erro:
-            print(f"[WhatsApp] notificador indisponível ({erro.__class__.__name__}); "
-                  f"o alerta {alerta_id} será enviado na próxima verificação do banco")
+            log.warning("Notificador indisponível (%s); o alerta %s será enviado na próxima verificação do banco",
+                        erro.__class__.__name__, alerta_id)
+
+    def avisar_texto(self, texto: str) -> None:
+        """Aviso que não é alerta de queda (ex.: câmera sem sinal): POST /aviso no notificador, em segundo plano."""
+        if self.configurado:
+            threading.Thread(target=self._post_texto, args=(texto,), daemon=True).start()
+
+    def _post_texto(self, texto: str) -> None:
+        try:
+            resposta = self._enviar(f"{self.url}/aviso", json={"texto": texto[:500]},
+                                    headers={"Authorization": f"Bearer {self.token}"}, timeout=TIMEOUT_S)
+            if resposta.status_code != 202:
+                log.warning("Notificador respondeu %s ao aviso", resposta.status_code)
+        except requests.RequestException as erro:
+            log.warning("Notificador indisponível para o aviso (%s)", erro.__class__.__name__)

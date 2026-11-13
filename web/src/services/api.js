@@ -6,12 +6,15 @@
  */
 
 const BASE = "/api";
+// Sem limite, uma conexão que "pendura" (rede ruim) deixava a tela esperando para sempre.
+const TEMPO_LIMITE_MS = 15000;
 
-/** fetch com JSON e erro legível. */
+/** fetch com JSON, tempo limite e erro legível. */
 async function requisitar(caminho, opcoes = {}) {
   const resposta = await fetch(BASE + caminho, {
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
+    signal: AbortSignal.timeout?.(TEMPO_LIMITE_MS),
     ...opcoes,
   });
   if (!resposta.ok) {
@@ -84,5 +87,9 @@ export const api = {
   criarAgente: (nome) => requisitar("/agentes", { method: "POST", body: JSON.stringify({ nome }) }),
   novaChaveAgente: (id) => requisitar(`/agentes/${id}/nova-chave`, { method: "POST" }),
   atualizarAgente: (id, ativo) => requisitar(`/agentes/${id}`, { method: "PATCH", body: JSON.stringify({ ativo }) }),
+  // Câmera do navegador: qualquer usuário logado, só para o próprio aparelho (identificador guardado nele).
+  agenteNavegador: (aparelho, nome) =>
+    requisitar("/agentes/navegador", { method: "POST", body: JSON.stringify({ aparelho, nome }) }),
+  encerrarAgenteNavegador: (aparelho) => requisitar(`/agentes/navegador/${aparelho}/encerrar`, { method: "POST" }),
   urlWebSocket: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${BASE}/ws`,
 };

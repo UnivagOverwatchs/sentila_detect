@@ -1,0 +1,64 @@
+# CI do Sentinela: roda em todo push e pull request.
+# Um PR só deve ser aceito com tudo verde: testes Python (SQLite e PostgreSQL), testes e build da interface,
+# auditoria de dependências (npm e pip) e build da imagem Docker do painel.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      # Postgres de teste: habilita os testes de pool/transação que pulam sem TEST_DATABASE_URL.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: teste
+          POSTGRES_DB: teste
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:teste@127.0.0.1:5432/teste
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements_pose.txt
+      - run: pip install -r requirements_pose.txt
+      - run: python -m pytest -q -p no:warnings
+
+  painel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Vulnerabilidades conhecidas nas versões fixadas da imagem do painel.
+      - run: pip install pip-audit && pip-audit -r deploy/requirements-painel.lock.txt
+      # A imagem compila (interface + servidor) com o lock.
+      - run: docker build -f deploy/Dockerfile -t sentinela-painel:ci .
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      # Falha só com vulnerabilidade alta/crítica em dependência que vai para o navegador.
+      - run: npm audit --omit=dev --audit-level=high

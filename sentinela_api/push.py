@@ -16,6 +16,7 @@ O celular só aceita push em páginas HTTPS (localhost também vale, para testes
 
 import base64
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
@@ -66,6 +67,8 @@ def sessao_ipv4() -> requests.Session:
     return sessao
 
 
+log = logging.getLogger("sentinela.push")
+
 MAX_ENVIOS_SIMULTANEOS = 8  # aparelhos avisados ao mesmo tempo
 # Trecho da resposta do FCM quando a assinatura foi criada com OUTRA chave VAPID (ex.: depois de trocar as chaves).
 _CHAVE_INCOMPATIVEL = "do not correspond"
@@ -95,13 +98,22 @@ class ServicoPush:
             return
         threading.Thread(target=self._enviar_para_todos, args=(alerta,), daemon=True).start()
 
+    def avisar_texto(self, titulo: str, corpo: str, tag: str) -> None:
+        """Aviso que não é alerta de queda (ex.: câmera sem sinal). `tag` evita empilhar avisos iguais no celular."""
+        if not self.configurado:
+            return
+        mensagem = json.dumps({"titulo": titulo, "corpo": corpo, "alerta_id": None, "tag": tag})
+        threading.Thread(target=self._enviar_mensagem, args=(mensagem, None), daemon=True).start()
+
     def _enviar_para_todos(self, alerta: Dict[str, Any]) -> None:
         mensagem = json.dumps({
             "titulo": _TITULOS.get(alerta["tipo"], "Alerta"),
             "corpo": f"{alerta['camera_nome']} · agora",
             "alerta_id": alerta["id"],
         })
-        alerta_id = alerta["id"] if isinstance(alerta["id"], int) else None
+        self._enviar_mensagem(mensagem, alerta["id"] if isinstance(alerta["id"], int) else None)
+
+    def _enviar_mensagem(self, mensagem: str, alerta_id: Optional[int]) -> None:
         assinaturas = self.banco.listar_assinaturas()
         if not assinaturas:
             return
@@ -150,7 +162,7 @@ class ServicoPush:
                     break  # 400/401/403... não melhoram sozinhos: tentar de novo só gasta tempo
                 if tentativa == 1:
                     time.sleep(self._espera_retentativa_s)
-        print(f"[Push] falha ao enviar ({codigo or 'erro'}): {detalhe}")
+        log.warning("Push falhou (%s): %s", codigo or "erro", detalhe)
         self._registrar(sub, alerta_id, "FALHA", codigo, detalhe)
 
     def _registrar(self, sub: Dict[str, Any], alerta_id: Optional[int], resultado: str,
@@ -158,7 +170,7 @@ class ServicoPush:
         try:
             self.banco.registrar_envio_push(sub.get("id"), alerta_id, resultado, codigo, detalhe)
         except Exception as erro:  # noqa: BLE001 - registrar não pode derrubar o aviso
-            print(f"[Push] não foi possível registrar o envio: {erro}")
+            log.warning("Não foi possível registrar o envio de push: %s", erro)
 
 
 if __name__ == "__main__":

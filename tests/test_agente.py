@@ -273,13 +273,38 @@ def test_sem_rede_o_alerta_fica_na_fila_e_segue_quando_a_rede_volta(painel):
     assert outro.enviar_pendentes() is True and banco.contar_pendentes() == 1 and outro.pendentes() == []
 
 
-def test_alerta_recusado_pelo_painel_e_descartado_e_nao_trava_a_fila(painel):
+def test_alerta_recusado_vai_para_recusados_e_nao_trava_a_fila(painel):
     banco, _, http, token, _, _, tmp = painel
     camera = _registrar_camera(http, token)
     remoto = BancoRemoto(_cliente(http, token), pasta_fila=str(tmp / "fila"))
     remoto.registrar_alerta(99999, 1, "queda", 0.9, None)        # câmera que não é deste agente: 404, nunca vai funcionar
     remoto.registrar_alerta(camera["id"], 2, "queda", 0.9, None)  # este é válido e não pode ficar preso atrás do outro
     assert remoto.enviar_pendentes() is True and remoto.pendentes() == [] and banco.contar_pendentes() == 1
+    # o recusado NÃO foi apagado: fica guardado para análise
+    assert len(os.listdir(tmp / "fila" / "recusados")) == 1
+
+
+def test_chave_recusada_401_mantem_os_alertas_na_fila(painel):
+    banco, _, http, token, _, _, tmp = painel
+    camera = _registrar_camera(http, token)
+    remoto = BancoRemoto(ClienteAgente("http://testserver", "snt_chave_errada", sessao=http), pasta_fila=str(tmp / "fila"))
+    remoto.registrar_alerta(camera["id"], 1, "queda", 0.9, None)
+    assert remoto.enviar_pendentes() is False
+    assert len(remoto.pendentes()) == 1 and banco.contar_pendentes() == 0
+    # chave corrigida no .env (agente reiniciado): o alerta sai
+    corrigido = BancoRemoto(_cliente(http, token), pasta_fila=str(tmp / "fila"))
+    assert corrigido.enviar_pendentes() is True and banco.contar_pendentes() == 1
+
+
+def test_foto_recusada_o_alerta_vai_sem_foto(painel):
+    banco, _, http, token, _, _, tmp = painel
+    camera = _registrar_camera(http, token)
+    foto = tmp / "nao_e_jpeg.jpg"
+    foto.write_bytes(b"isto nao e um jpeg")  # o painel recusa a foto (422)
+    remoto = BancoRemoto(_cliente(http, token), pasta_fila=str(tmp / "fila"))
+    remoto.registrar_alerta(camera["id"], 1, "queda", 0.9, str(foto))
+    assert remoto.enviar_pendentes() is True
+    assert banco.contar_pendentes() == 1  # a queda chegou, mesmo sem a foto
 
 
 def test_sincronizador_envia_quadro_status_e_aplica_a_config_do_painel(painel):
