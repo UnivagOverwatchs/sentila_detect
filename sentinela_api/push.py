@@ -16,6 +16,7 @@ O celular só aceita push em páginas HTTPS (localhost também vale, para testes
 
 import base64
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
@@ -65,6 +66,8 @@ def sessao_ipv4() -> requests.Session:
     sessao.mount("https://", AdaptadorIPv4())
     return sessao
 
+
+log = logging.getLogger("sentinela.push")
 
 MAX_ENVIOS_SIMULTANEOS = 8  # aparelhos avisados ao mesmo tempo
 # Trecho da resposta do FCM quando a assinatura foi criada com OUTRA chave VAPID (ex.: depois de trocar as chaves).
@@ -159,7 +162,7 @@ class ServicoPush:
                     break  # 400/401/403... não melhoram sozinhos: tentar de novo só gasta tempo
                 if tentativa == 1:
                     time.sleep(self._espera_retentativa_s)
-        print(f"[Push] falha ao enviar ({codigo or 'erro'}): {detalhe}")
+        log.warning("Push falhou (%s): %s", codigo or "erro", detalhe)
         self._registrar(sub, alerta_id, "FALHA", codigo, detalhe)
 
     def _registrar(self, sub: Dict[str, Any], alerta_id: Optional[int], resultado: str,
@@ -167,7 +170,7 @@ class ServicoPush:
         try:
             self.banco.registrar_envio_push(sub.get("id"), alerta_id, resultado, codigo, detalhe)
         except Exception as erro:  # noqa: BLE001 - registrar não pode derrubar o aviso
-            print(f"[Push] não foi possível registrar o envio: {erro}")
+            log.warning("Não foi possível registrar o envio de push: %s", erro)
 
 
 if __name__ == "__main__":

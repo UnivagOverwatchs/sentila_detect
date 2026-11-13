@@ -21,6 +21,7 @@ Se a internet cair, os alertas ficam na pasta fila_agente/ e seguem quando ela v
 
 import argparse
 import faulthandler
+import logging
 import os
 import sys
 import time
@@ -31,9 +32,13 @@ faulthandler.enable()
 load_dotenv()
 
 from sentinela_api.cliente_agente import BancoRemoto, ClienteAgente, ErroDefinitivo, Sincronizador  # noqa: E402
+from sentinela_api.registro import configurar_logs  # noqa: E402
 from sentinela_api.sensibilidade import aplicar_sensibilidade  # noqa: E402
 from sentinela_api.servico_visao import ServicoVisao  # noqa: E402
 from sentinela_pose.alertas import NotificadorAlertas  # noqa: E402
+
+configurar_logs()
+log = logging.getLogger("sentinela.agente")
 
 
 def conectar(cliente: ClienteAgente, nome: str, local: str, tentativas_ate: float = 300.0) -> dict:
@@ -48,7 +53,7 @@ def conectar(cliente: ClienteAgente, nome: str, local: str, tentativas_ate: floa
         except Exception as erro:  # noqa: BLE001 - rede, DNS, 5xx
             if time.monotonic() > limite:
                 sys.exit(f"[Agente] não consegui falar com o painel: {erro}")
-            print(f"[Agente] painel indisponível ({erro.__class__.__name__}); tentando de novo em {espera:.0f} s")
+            log.warning("Painel indisponível (%s); tentando de novo em %.0f s", erro.__class__.__name__, espera)
             time.sleep(espera)
             espera = min(espera * 2, 30)
 
@@ -74,7 +79,7 @@ def main() -> None:
         cliente.sessao = sessao_ipv4()
 
     camera = conectar(cliente, args.camera, args.local)
-    print(f"[Agente] câmera '{camera['nome']}' registrada no painel (id {camera['id']}).")
+    log.info("Câmera '%s' registrada no painel (id %s).", camera["nome"], camera["id"])
     aplicar_sensibilidade_inicial = camera.get("sensibilidade")
 
     banco = BancoRemoto(cliente, pasta_fila=os.getenv("PASTA_FILA", "fila_agente"),
@@ -88,7 +93,7 @@ def main() -> None:
                                   fps_video=float(os.getenv("AGENTE_FPS_VIDEO", "6")))
     servico.iniciar()
     sincronizador.iniciar()
-    print("[Agente] detectando. Ctrl+C para parar.")
+    log.info("Detectando. Ctrl+C para parar.")
     try:
         while True:
             time.sleep(1)
@@ -98,7 +103,7 @@ def main() -> None:
         sincronizador.parar()
         servico.parar()
         banco.parar()
-        print("[Agente] encerrado.")
+        log.info("Encerrado.")
 
 
 if __name__ == "__main__":

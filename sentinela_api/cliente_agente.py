@@ -237,7 +237,7 @@ class Sincronizador:
             self.assistindo = self.cliente.enviar_quadro(self.camera_id, self.servico.jpeg_atual())
         except (requests.RequestException, ErroDefinitivo) as erro:
             self.assistindo = False
-            print(f"[Agente] quadro não enviado ({erro.__class__.__name__}): {str(erro)[:100]}")
+            log.warning("Quadro não enviado (%s): %s", erro.__class__.__name__, str(erro)[:100])
 
     def sincronizar_uma_vez(self, quadro=True, status=True, config=True) -> None:
         """Cada parte falha sozinha: um erro de rede em uma não impede as outras."""
@@ -252,7 +252,7 @@ class Sincronizador:
             try:
                 passo()
             except (requests.RequestException, ErroDefinitivo) as erro:
-                print(f"[Agente] sincronização falhou ({erro.__class__.__name__}): {str(erro)[:120]}")
+                log.warning("Sincronização falhou (%s): %s", erro.__class__.__name__, str(erro)[:120])
 
     def _buscar_configuracao(self) -> None:
         config = self.cliente.configuracao(self.camera_id)
