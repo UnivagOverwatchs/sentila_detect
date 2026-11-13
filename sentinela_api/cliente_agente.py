@@ -12,10 +12,17 @@ Sincronizador   a cada segundo manda um quadro, a cada poucos segundos o status,
 
 Privacidade: a foto do alerta só sai do local para o painel; depois do envio a cópia local é apagada
 (AGENTE_GUARDAR_FOTOS=1 mantém).
+
+Nenhum alerta é apagado sem chegar ao painel:
+  - sem rede / painel fora / 5xx / 429  -> fica na fila e tenta de novo com espera crescente;
+  - 401 (chave trocada ou revogada)     -> fica na fila: volta a enviar quando a chave do .env for corrigida;
+  - recusado com foto                    -> tenta de novo SEM a foto (foto grande/inválida não derruba o alerta);
+  - recusado mesmo sem foto              -> vai para fila_agente/recusados/ (com a foto) para análise, nunca é apagado.
 """
 
 import base64
 import json
+import logging
 import os
 import threading
 import time
@@ -27,9 +34,15 @@ import requests
 TIMEOUT_S = 10
 ESPERA_MAX_S = 60
 
+log = logging.getLogger("sentinela.agente")
+
 
 class ErroDefinitivo(Exception):
-    """O painel recusou (4xx): repetir não adianta."""
+    """O painel recusou (4xx): repetir igual não adianta."""
+
+    def __init__(self, mensagem: str, codigo: int = 0):
+        super().__init__(mensagem)
+        self.codigo = codigo
 
 
 class ClienteAgente:
@@ -43,7 +56,7 @@ class ClienteAgente:
         resposta = getattr(self.sessao, metodo)(self.url + caminho, headers={**self._cabecalho, **kw.pop("headers", {})},
                                                 timeout=self.timeout, **kw)
         if 400 <= resposta.status_code < 500 and resposta.status_code != 429:
-            raise ErroDefinitivo(f"{resposta.status_code}: {resposta.text[:200]}")
+            raise ErroDefinitivo(f"{resposta.status_code}: {resposta.text[:200]}", resposta.status_code)
         resposta.raise_for_status()
         return resposta
 
@@ -135,11 +148,15 @@ class BancoRemoto:
                 with open(item["imagem"], "rb") as foto:
                     jpeg = foto.read()
             try:
-                self.cliente.enviar_alerta(item["camera_id"], item["track_id"], item["tipo"], item["confianca"], jpeg, item.get("detalhes"))
+                self._enviar_item(item, jpeg)
             except ErroDefinitivo as erro:
-                print(f"[Agente] alerta descartado, o painel recusou: {erro}")
+                if erro.codigo == 401:
+                    log.error("Chave do agente recusada (401): os alertas ficam na fila até a chave do .env ser corrigida")
+                    return False
+                self._mover_para_recusados(caminho, item, erro)
+                continue
             except requests.RequestException as erro:
-                print(f"[Agente] sem conexão com o painel ({erro.__class__.__name__}); o alerta fica na fila")
+                log.warning("Sem conexão com o painel (%s); o alerta fica na fila", erro.__class__.__name__)
                 return False
             if item.get("imagem") and not self.guardar_fotos:
                 try:
@@ -148,6 +165,26 @@ class BancoRemoto:
                     pass
             os.remove(caminho)
         return True
+
+    def _enviar_item(self, item: Dict[str, Any], jpeg: Optional[bytes]) -> None:
+        """Envia; se o painel recusar um alerta COM foto, tenta de novo sem ela (o alerta importa mais que a foto)."""
+        argumentos = (item["camera_id"], item["track_id"], item["tipo"], item["confianca"])
+        try:
+            self.cliente.enviar_alerta(*argumentos, jpeg, item.get("detalhes"))
+        except ErroDefinitivo as erro:
+            if not jpeg or erro.codigo == 401:
+                raise
+            log.warning("Painel recusou o alerta com foto (%s); enviando sem a foto", erro.codigo)
+            self.cliente.enviar_alerta(*argumentos, None, item.get("detalhes"))
+
+    def _mover_para_recusados(self, caminho: str, item: Dict[str, Any], erro: Exception) -> None:
+        """Recusado mesmo sem foto: guarda o alerta (e a foto) em recusados/ para análise; nunca apaga."""
+        pasta = os.path.join(self.pasta_fila, "recusados")
+        os.makedirs(pasta, exist_ok=True)
+        os.replace(caminho, os.path.join(pasta, os.path.basename(caminho)))
+        if item.get("imagem") and os.path.exists(item["imagem"]):
+            os.replace(item["imagem"], os.path.join(pasta, os.path.basename(item["imagem"])))
+        log.error("ALERTA RECUSADO pelo painel (%s); guardado em %s para análise", erro, pasta)
 
     def _trabalhar(self) -> None:
         espera = self._espera_inicial_s
