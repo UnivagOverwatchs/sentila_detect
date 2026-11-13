@@ -5,22 +5,18 @@
  * A detecção de queda roda AQUI, na página (MediaPipe + detectorQueda.js). Se o modelo não carregar, a tela diz com todas
  * as letras que a câmera só transmite e o painel marca "SÓ VÍDEO", para ninguém achar que há proteção onde não há.
  */
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { IconeCamera } from "./Icones.jsx";
+import { VideoLocal } from "./VideoLocal.jsx";
 import { nomeDoAparelho } from "../services/push.js";
 
 export function CameraDoAparelho({ camera, embutida = false }) {
   const [nome, setNome] = useState(`Câmera ${nomeDoAparelho()}`);
   const [local, setLocal] = useState("");
   const [facing, setFacing] = useState("user");
-  const previa = useRef(null);
-  const { fase, erro, assistindo, fps, pausada, stream, suportado, iniciar, parar, deteccao, pessoas, achadas, ultimoAlerta, processador, msDeteccao } = camera;
+  const { fase, erro, assistindo, fps, pausada, suportado, iniciar, parar, deteccao, pessoas, achadas, ultimoAlerta, processador, msDeteccao } = camera;
   const ligada = fase === "transmitindo";
   const ocupada = fase === "pedindo" || fase === "conectando";
-
-  useEffect(() => {
-    if (previa.current) previa.current.srcObject = ligada ? stream : null;
-  }, [ligada, stream]);
 
   // "embutida": dentro do assistente "Adicionar câmera" (sem cartão nem título próprios).
   const Envoltorio = embutida ? "div" : "section";
@@ -40,7 +36,7 @@ export function CameraDoAparelho({ camera, embutida = false }) {
       ) : ligada || ocupada ? (
         <>
           <div className="previa-camera">
-            {ligada ? <video ref={previa} autoPlay muted playsInline /> : <span>Aguardando a permissão da câmera…</span>}
+            {ligada ? <VideoLocal camera={camera} /> : <span>Aguardando a permissão da câmera…</span>}
           </div>
           <p className="dica">
             <IconeCamera tamanho={14} /> {ligada ? `Transmitindo "${camera.nome}"` : "Conectando…"}

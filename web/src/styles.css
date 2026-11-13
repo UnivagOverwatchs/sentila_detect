@@ -1335,7 +1335,7 @@ p {
   display: grid;
   place-items: center;
   aspect-ratio: 16 / 9;
-  max-height: 260px;
+  max-height: 420px; /* visão local maior: é o "espelho" de quem está na frente da câmera */
   margin: 0 0 10px;
   border-radius: var(--raio-p);
   overflow: hidden;
@@ -1754,4 +1754,29 @@ p {
   .quadro-monitor__figura {
     animation: none !important;
   }
+}
+
+/* Visão local da câmera deste aparelho (components/VideoLocal.jsx): vídeo + esqueleto alinhados */
+.video-local {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.video-local video,
+.video-local canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.tile-camera .video-local video {
+  object-fit: cover;
+}
+.video-local--espelho {
+  transform: scaleX(-1); /* câmera frontal como espelho */
+}
+.previa-camera .video-local {
+  aspect-ratio: 16 / 9;
 }
