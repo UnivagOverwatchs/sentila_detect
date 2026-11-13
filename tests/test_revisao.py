@@ -142,3 +142,36 @@ def test_status_do_tempo_real_e_calculado_uma_vez_por_segundo_para_todos(painel,
     finally:
         for ws in sockets:
             ws.__exit__(None, None, None)
+
+
+def test_banco_falhando_na_hora_da_queda_o_alerta_e_gravado_depois(tmp_path):
+    """Câmera local: o gravador tenta de novo; o vídeo não espera o banco e o alerta não se perde."""
+    import time as relogio
+
+    from sentinela_api.servico_visao import ServicoVisao
+    from sentinela_pose.alertas import NotificadorAlertas
+    from sentinela_pose.config import ConfigQueda
+    from test_api import CapturaFalsa, EstimadorFalso
+
+    banco = Banco(str(tmp_path / "local.db"), usar_postgres=False)
+    camera = banco.garantir_camera("Quarto", "T", "fake")
+    original = banco.registrar_alerta
+    falhas = {"n": 0}
+
+    def instavel(*a, **kw):
+        if falhas["n"] < 2:
+            falhas["n"] += 1
+            raise ConnectionError("banco fora do ar")
+        return original(*a, **kw)
+    banco.registrar_alerta = instavel
+    servico = ServicoVisao(banco, camera, "fake", cfg_queda=ConfigQueda(), criar_captura=CapturaFalsa,
+                           criar_estimador=EstimadorFalso, desenhar=lambda q, p, f: q,
+                           notificador=NotificadorAlertas(pasta=str(tmp_path / "fotos"), cooldown_s=0))
+    servico.iniciar()
+    try:
+        limite = relogio.monotonic() + 15
+        while relogio.monotonic() < limite and banco.contar_pendentes() == 0:
+            relogio.sleep(0.2)
+        assert falhas["n"] == 2 and banco.contar_pendentes() == 1
+    finally:
+        servico.parar()

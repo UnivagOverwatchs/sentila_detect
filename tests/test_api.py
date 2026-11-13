@@ -45,7 +45,7 @@ class EstimadorFalso:
     """Simula uma queda usando o relógio real (a lógica de queda é baseada em tempo)."""
 
     def __init__(self, _cfg):
-        self.inicio = time.time()
+        self.inicio = time.monotonic()  # mesmo relógio do ServicoVisao
 
     def processar(self, _quadro, agora):
         t = agora - self.inicio
