@@ -34,6 +34,8 @@ Agente de visão (rotas_agente.py): /api/agente/* usa chave própria (Bearer), n
 import asyncio
 import math
 import os
+import threading
+import time
 from datetime import datetime
 from typing import Annotated, Literal, Optional
 from urllib.parse import urlparse
@@ -125,6 +127,12 @@ class AtualizarAgente(BaseModel):
     ativo: bool
 
 
+class AgenteNavegador(BaseModel):
+    """Câmera do navegador: cada aparelho tem um identificador aleatório próprio (gerado e guardado nele)."""
+    aparelho: str = Field(pattern=r"^[a-z0-9]{12,40}$")
+    nome: str = Field(min_length=1, max_length=60)
+
+
 class NovoContato(BaseModel):
     nome: str = Field(min_length=1, max_length=120)
     telefone: str = Field(min_length=3, max_length=20, pattern=r"^[0-9+()\-\s]+$")
@@ -169,7 +177,17 @@ def _poligono_se_cruza(poligono) -> bool:
     return False
 
 
+# Câmera do navegador: qualquer usuário logado liga a câmera do PRÓPRIO aparelho (não precisa ser administrador).
+ROTA_AGENTE_NAVEGADOR = "/api/agentes/navegador"
+MAX_AGENTES_NAVEGADOR = 50
+PREFIXO_NAVEGADOR = "Navegador "
+
+INTERVALO_STATUS_COMPARTILHADO_S = 1.0  # status e alertas recentes calculados uma vez por segundo para TODOS os painéis
+
+
 def _exige_admin(metodo: str, caminho: str) -> bool:
+    if caminho == ROTA_AGENTE_NAVEGADOR or caminho.startswith(ROTA_AGENTE_NAVEGADOR + "/"):
+        return False
     if any(caminho == a or caminho.startswith(a + "/") for a in ADMIN_TOTAL):
         return True
     return metodo not in ("GET", "HEAD", "OPTIONS") and any(
@@ -179,26 +197,33 @@ def _exige_admin(metodo: str, caminho: str) -> bool:
 def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = None, push=None,
               exigir_login: bool = False, cookie_seguro: bool = False,
               limitador: Optional[auth.LimitadorLogin] = None,
-              pasta_fotos: str = "alertas_queda", notificador_remoto=None) -> FastAPI:
+              pasta_fotos: str = "alertas_queda", notificador_remoto=None,
+              limitador_ip: Optional[auth.LimitadorLogin] = None) -> FastAPI:
     """Fábrica da aplicação: recebe as dependências prontas (facilita os testes).
 
     exigir_login=False mantém o painel aberto (uso local). Em servidor público, use True.
     """
     limitador = limitador or auth.LimitadorLogin()
+    # Por IP: impede testar senhas em muitos usuários a partir do mesmo lugar e gastar processador com scrypt.
+    limitador_ip = limitador_ip or auth.LimitadorLogin(max_erros=20, bloqueio_s=15 * 60)
+    sessoes = auth.CacheSessoes()
 
     def usuario_da_conexao(conn: HTTPConnection) -> Optional[dict]:
         token = conn.cookies.get(auth.COOKIE_SESSAO)
-        return banco.obter_usuario_da_sessao(auth.hash_token(token)) if token else None
+        return sessoes.obter(auth.hash_token(token), banco.obter_usuario_da_sessao) if token else None
+
+    def origem_permitida(conn: HTTPConnection) -> bool:
+        """Sem cabeçalho Origin (apps, curl) ou com a mesma origem do servidor."""
+        origem = conn.headers.get("origin")
+        return not origem or urlparse(origem).netloc == conn.headers.get("host", "")
 
     def proteger(conn: HTTPConnection) -> None:
         """Roda antes de toda rota HTTP: confere origem (CSRF), login e papel."""
         if conn.scope["type"] != "http":
             return  # o WebSocket confere o cookie por conta própria
         metodo, caminho = conn.scope["method"], conn.url.path
-        if metodo not in ("GET", "HEAD", "OPTIONS"):
-            origem = conn.headers.get("origin")
-            if origem and urlparse(origem).netloc != conn.headers.get("host", ""):
-                raise HTTPException(403, "Origem não permitida")
+        if metodo not in ("GET", "HEAD", "OPTIONS") and not origem_permitida(conn):
+            raise HTTPException(403, "Origem não permitida")
         if not exigir_login or caminho in ROTAS_PUBLICAS or not caminho.startswith("/api/"):
             return
         if caminho.startswith("/api/agente/"):
@@ -214,6 +239,19 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
 
     # Aplica a sensibilidade salva ao detector já na inicialização.
     aplicar_sensibilidade(servico.cfg_queda, banco.obter_sensibilidade())
+
+    # ---- status e alertas recentes COMPARTILHADOS: um cálculo por segundo, não um por painel aberto.
+    compartilhado = {"status": None, "alertas": None, "em": 0.0}
+    trava_compartilhado = threading.Lock()
+
+    def instantaneo() -> tuple:
+        """(status, alertas recentes) com no máximo 1 s de idade. Com 10 painéis abertos o banco faz o trabalho de 1."""
+        with trava_compartilhado:
+            if time.monotonic() - compartilhado["em"] >= INTERVALO_STATUS_COMPARTILHADO_S or compartilhado["status"] is None:
+                compartilhado["status"] = montar_status()
+                compartilhado["alertas"] = banco.listar_alertas(limite=50)
+                compartilhado["em"] = time.monotonic()
+            return compartilhado["status"], compartilhado["alertas"]
 
     def montar_status() -> dict:
         cameras = banco.listar_cameras()
@@ -231,7 +269,7 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
     # ------------------------------------------------------------ status e vídeo
     @app.get("/api/status")
     def obter_status():
-        return montar_status()
+        return montar_status()  # chamada avulsa: sempre fresca (o cache de 1 s é para o tempo real)
 
     @app.get("/api/quadro")
     def quadro_atual(camera_id: Optional[int] = None):
@@ -304,6 +342,7 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
             raise HTTPException(404, "Câmera não encontrada")
         if hasattr(servico, "esquecer_camera"):
             servico.esquecer_camera(camera_id)
+        chaves_mudaram()
         pasta = os.path.realpath(pasta_fotos)
         for caminho in fotos:  # só apaga arquivo que está dentro da pasta de fotos
             real = os.path.realpath(caminho)
@@ -362,9 +401,12 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
                             samesite="lax", secure=cookie_seguro, path="/")
 
     @app.post("/api/login")
-    def entrar(dados: Login, resposta: Response):
+    def entrar(dados: Login, resposta: Response, request: Request):
         chave = dados.usuario.strip().lower()
-        espera = limitador.segundos_restantes(chave)
+        # IP real do navegador: atrás do Apache vem do X-Forwarded-For (o uvicorn só confia nele vindo de 127.0.0.1).
+        chave_ip = "ip:" + (request.client.host if request.client else "?")
+        # Conferido ANTES do scrypt: tentativas em massa não gastam processador.
+        espera = max(limitador.segundos_restantes(chave), limitador_ip.segundos_restantes(chave_ip))
         if espera:
             raise HTTPException(429, f"Muitas tentativas. Tente de novo em {math.ceil(espera / 60)} min.",
                                 headers={"Retry-After": str(espera)})
@@ -373,6 +415,7 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         senha_ok = auth.verificar_senha(dados.senha, registro["senha_hash"] if registro else auth.HASH_FALSO)
         if not (registro and registro["ativo"] and senha_ok):
             limitador.registrar_erro(chave)
+            limitador_ip.registrar_erro(chave_ip)
             raise HTTPException(401, "Usuário ou senha inválidos")
         limitador.registrar_sucesso(chave)
         token = auth.novo_token()
@@ -386,6 +429,7 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         token = request.cookies.get(auth.COOKIE_SESSAO)
         if token:
             banco.encerrar_sessao(auth.hash_token(token))
+            sessoes.esquecer(auth.hash_token(token))
         resposta.delete_cookie(auth.COOKIE_SESSAO, path="/")
 
     @app.get("/api/eu")
@@ -426,9 +470,17 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
                                              papel=dados.papel, ativo=dados.ativo, senha_hash=senha_hash)
         if senha_hash or dados.ativo is False or dados.papel:
             banco.encerrar_sessoes_do_usuario(usuario_id)  # nova senha/desativação/novo papel: entra de novo
+            sessoes.esquecer_usuario(usuario_id)  # vale já na próxima requisição, sem esperar o cache vencer
         return atualizado
 
     # ------------------------------------------------------------ chaves dos agentes de câmera (só ADMIN)
+    rotas_do_agente = criar_rotas_agente(banco, servico, push, notificador_remoto, pasta_fotos) \
+        if hasattr(servico, "receber_quadro") else None
+
+    def chaves_mudaram() -> None:
+        if rotas_do_agente is not None:
+            rotas_do_agente.esquecer_chaves()
+
     def _agente_por_id(agente_id: int) -> dict:
         for agente in banco.listar_agentes():
             if agente["id"] == agente_id:
@@ -464,17 +516,50 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
         agente = _agente_por_id(agente_id)
         token = chaves_de_agente.novo_token()
         banco.trocar_token_do_agente(agente["nome"], chaves_de_agente.hash_token(token))
+        chaves_mudaram()
         return {**_com_tempo(_agente_por_id(agente_id)), "token": token}  # a chave antiga deixa de valer neste instante
 
     @app.patch("/api/agentes/{agente_id}")
     def ativar_ou_revogar_agente(agente_id: int, dados: AtualizarAgente):
         agente = _agente_por_id(agente_id)
         banco.definir_agente_ativo(agente["nome"], dados.ativo)
+        chaves_mudaram()
         return _com_tempo(_agente_por_id(agente_id))
 
+    # ---- câmera do navegador: qualquer usuário logado, só para o próprio aparelho
+    def _agente_do_aparelho(aparelho: str) -> Optional[dict]:
+        marca = f"{PREFIXO_NAVEGADOR}[{aparelho[:12]}]"
+        return next((a for a in banco.listar_agentes() if a["nome"].startswith(marca)), None)
+
+    @app.post(ROTA_AGENTE_NAVEGADOR, status_code=201)
+    def agente_do_navegador(dados: AgenteNavegador):
+        """
+        Liga a câmera DESTE aparelho: cria (ou renova) a chave do agente dele. O nome do agente leva o identificador
+        do aparelho, então dois celulares com o mesmo nome de câmera não derrubam um ao outro.
+        """
+        token = chaves_de_agente.novo_token()
+        existente = _agente_do_aparelho(dados.aparelho)
+        if existente:
+            banco.trocar_token_do_agente(existente["nome"], chaves_de_agente.hash_token(token))
+            chaves_mudaram()
+            return {"id": existente["id"], "nome": existente["nome"], "token": token}
+        if sum(a["nome"].startswith(PREFIXO_NAVEGADOR) for a in banco.listar_agentes()) >= MAX_AGENTES_NAVEGADOR:
+            raise HTTPException(429, "Limite de câmeras de navegador atingido. Exclua as antigas em Configurações.")
+        nome = f"{PREFIXO_NAVEGADOR}[{dados.aparelho[:12]}] {dados.nome.strip()}"[:80]
+        agente = banco.criar_agente(nome, chaves_de_agente.hash_token(token))
+        return {"id": agente["id"], "nome": agente["nome"], "token": token}
+
+    @app.post(ROTA_AGENTE_NAVEGADOR + "/{aparelho}/encerrar", status_code=204)
+    def encerrar_agente_do_navegador(aparelho: str):
+        """Ao desligar a câmera do aparelho, a chave dele deixa de valer."""
+        agente = _agente_do_aparelho(aparelho) if aparelho.isalnum() else None
+        if agente:
+            banco.definir_agente_ativo(agente["nome"], False)
+            chaves_mudaram()
+
     # ------------------------------------------------------------ agentes de visão (só no modo painel)
-    if hasattr(servico, "receber_quadro"):
-        app.include_router(criar_rotas_agente(banco, servico, push, notificador_remoto, pasta_fotos))
+    if rotas_do_agente is not None:
+        app.include_router(rotas_do_agente)
 
     # ---- Web Push (aviso com o app fechado)
     @app.get("/api/push/chave")
@@ -513,20 +598,24 @@ def criar_app(banco: Banco, servico: ServicoVisao, pasta_web: Optional[str] = No
 
     @app.websocket("/api/ws")
     async def tempo_real(ws: WebSocket):
+        if not origem_permitida(ws):
+            await ws.close(code=4403)  # outro site tentando abrir o tempo real com o cookie do usuário
+            return
         if exigir_login and not await asyncio.to_thread(usuario_da_conexao, ws):
             await ws.close(code=4401)  # sem sessão válida: a conexão é recusada
             return
         await ws.accept()
-        # Consultas ao banco rodam em outra thread (asyncio.to_thread): com o PostgreSQL num
-        # servidor, cada consulta leva alguns ms de rede e não pode bloquear o loop da API.
-        ultimo_id = await asyncio.to_thread(banco.ultimo_alerta_id)  # só avisa alertas novos
+        # O banco é consultado no máximo uma vez por segundo para TODOS os painéis (instantaneo), e em outra
+        # thread (asyncio.to_thread): a espera da rede até o PostgreSQL não bloqueia o loop da API.
+        _, recentes = await asyncio.to_thread(instantaneo)
+        ultimo_id = max((a["id"] for a in recentes), default=0)  # só avisa alertas novos
         try:
             while True:
-                novos = await asyncio.to_thread(banco.listar_alertas, depois_de_id=ultimo_id)
-                for alerta in reversed(novos):
+                status, recentes = await asyncio.to_thread(instantaneo)
+                for alerta in sorted((a for a in recentes if a["id"] > ultimo_id), key=lambda a: a["id"]):
                     await ws.send_json({"tipo": "alerta", "alerta": alerta})
-                    ultimo_id = max(ultimo_id, alerta["id"])
-                await ws.send_json({"tipo": "status", "status": await asyncio.to_thread(montar_status)})
+                    ultimo_id = alerta["id"]
+                await ws.send_json({"tipo": "status", "status": status})
                 await asyncio.sleep(INTERVALO_STATUS_S)
         except (WebSocketDisconnect, RuntimeError):
             pass  # navegador fechou a aba

@@ -81,6 +81,44 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+class CacheSessoes:
+    """
+    Guarda por alguns segundos o resultado de "de quem é esta sessão?".
+
+    Sem isso, TODA requisição (inclusive cada quadro do vídeo ao vivo, ~6 por segundo por pessoa assistindo)
+    consultava o banco. Logout, troca de senha, desativação e mudança de papel limpam o cache na hora;
+    expiração natural da sessão leva no máximo `validade_s` para valer.
+    """
+
+    def __init__(self, validade_s: float = 30.0, agora=time.monotonic):
+        self.validade_s = validade_s
+        self._agora = agora
+        self._itens: Dict[str, Tuple[Optional[dict], float]] = {}
+        self._lock = threading.Lock()
+
+    def obter(self, token_hash: str, buscar) -> Optional[dict]:
+        agora = self._agora()
+        with self._lock:
+            item = self._itens.get(token_hash)
+            if item and item[1] > agora:
+                return item[0]
+        usuario = buscar(token_hash)  # fora da trava: a consulta ao banco não segura as outras requisições
+        with self._lock:
+            if len(self._itens) > 10_000:  # proteção contra crescer sem limite (tokens inventados)
+                self._itens.clear()
+            self._itens[token_hash] = (usuario, agora + self.validade_s)
+        return usuario
+
+    def esquecer(self, token_hash: str) -> None:
+        with self._lock:
+            self._itens.pop(token_hash, None)
+
+    def esquecer_usuario(self, usuario_id: int) -> None:
+        with self._lock:
+            for chave in [c for c, (u, _) in self._itens.items() if u and u.get("id") == usuario_id]:
+                del self._itens[chave]
+
+
 class LimitadorLogin:
     """Tranca o login de um usuário depois de erros seguidos (em memória; reinicia com o servidor)."""
 
