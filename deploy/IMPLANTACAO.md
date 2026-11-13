@@ -198,6 +198,23 @@ systemctl reload httpd
 
 Os outros containers (`sentinela`, `sentinela-dashboard` etc.) não são tocados em nenhum passo.
 
+## Backup
+
+O script `deploy/backup.sh` copia o banco (`pg_dump`) e as fotos para `/opt/sentinela/backups` e mantém 14 dias.
+
+```bash
+bash /opt/sentinela/deploy/backup.sh                      # faça um agora e confira o tamanho
+ls -lh /opt/sentinela/backups
+crontab -e                                                # e adicione a linha abaixo (todo dia às 3h15)
+15 3 * * * bash /opt/sentinela/deploy/backup.sh >> /var/log/sentinela-backup.log 2>&1
+```
+
+Se o container do Postgres não se chamar `sentinela`, rode com `CONTAINER_PG=<nome> bash ...`.
+Restaurar o banco: `docker exec -i sentinela pg_restore -U sentinelas -d sentinela --clean --if-exists < banco-AAAA-MM-DD.dump`
+e as fotos: `tar -xzf fotos-AAAA-MM-DD.tar.gz -C /opt/sentinela/dados/alertas`.
+Os arquivos têm dados de residentes (LGPD): ficam só para o root e devem ser copiados para fora da VPS
+(ex.: `scp` para um computador da equipe) de vez em quando, pois um backup na mesma máquina some junto com ela.
+
 ## Depois do painel no ar (segurança da VPS)
 
 Faça nesta ordem, **com um backup feito antes** (seção "Backup"):
