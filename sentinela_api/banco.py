@@ -16,9 +16,13 @@ A senha do banco fica só no .env (fora do git) e nunca é impressa.
 
 LGPD: nenhuma tabela guarda vídeo. Só o caminho da foto do momento do alerta.
 
-Concorrência: a thread de visão grava e a API lê ao mesmo tempo. Uma única conexão
-protegida por Lock basta para o volume de uma ILPI; se a conexão com o servidor cair,
-reconectamos uma vez e repetimos a operação.
+Concorrência:
+  - PostgreSQL: CONJUNTO de conexões (psycopg_pool, até BANCO_POOL_MAX, padrão 10). Cada consulta pega uma
+    conexão livre; uma consulta lenta não segura as outras (antes era uma conexão só, numa fila única, e o
+    painel, o vídeo e os alertas esperavam uns pelos outros). Conexões quebradas são testadas e trocadas pelo pool.
+    Sem o pacote psycopg_pool instalado, volta ao modo antigo (uma conexão + trava).
+  - SQLite (desenvolvimento/testes): uma conexão protegida por trava.
+Operações com vários comandos que precisam acontecer juntos usam `_transacao` (tudo ou nada).
 """
 
 import json
@@ -109,6 +113,17 @@ CREATE TABLE IF NOT EXISTS configuracao (
 );
 """
 
+# Índices das consultas feitas o tempo todo (sem eles o banco lê a tabela inteira, e fica mais lento a cada alerta):
+#   pendentes contados a cada segundo pelo painel; eventos por câmera (exclusão) e por data (retenção, WhatsApp);
+#   limpeza de sessões vencidas; último envio de push por aparelho.
+_INDICES = """
+CREATE INDEX IF NOT EXISTS idx_alerta_pendente ON alerta (status) WHERE status = 'PENDENTE';
+CREATE INDEX IF NOT EXISTS idx_evento_camera ON evento (camera_id);
+CREATE INDEX IF NOT EXISTS idx_evento_ocorrido ON evento (ocorrido_em);
+CREATE INDEX IF NOT EXISTS idx_sessao_expira ON sessao (expira_em);
+CREATE INDEX IF NOT EXISTS idx_envio_push_assinatura ON envio_push (assinatura_id, id)
+"""
+
 # Mapeia o tipo da lógica de queda para o enum TipoEvento da documentação.
 TIPO_EVENTO = {"queda": "QUEDA", "pessoa_no_chao": "MOVIMENTO_ANOMALO"}
 STATUS_VALIDOS = {"PENDENTE", "RESOLVIDO", "FALSO_ALARME"}
@@ -188,9 +203,22 @@ class _Postgres(_Dialeto):
         # PGDATABASE, PGUSER, PGPASSWORD e PGSSLMODE do ambiente.
         self.conninfo = os.getenv("DATABASE_URL", "")
 
-    def conectar(self):
+    def _opcoes(self) -> Dict[str, Any]:
         from psycopg.rows import dict_row
-        return self._psycopg.connect(self.conninfo, autocommit=True, row_factory=dict_row, connect_timeout=10)
+        return {"autocommit": True, "row_factory": dict_row, "connect_timeout": 10}
+
+    def conectar(self):
+        return self._psycopg.connect(self.conninfo, **self._opcoes())
+
+    def criar_pool(self):
+        """Conjunto de conexões; None se o pacote psycopg_pool não estiver instalado (cai no modo de uma conexão)."""
+        try:
+            from psycopg_pool import ConnectionPool
+        except ImportError:
+            return None
+        return ConnectionPool(self.conninfo, min_size=1, max_size=int(os.getenv("BANCO_POOL_MAX", "10")),
+                              kwargs=self._opcoes(), check=ConnectionPool.check_connection, timeout=15,
+                              open=True, name="sentinela")
 
     def sql(self, texto: str) -> str:
         return texto.replace("?", "%s")
@@ -215,13 +243,26 @@ class Banco:
             usar_postgres = postgres_configurado()
         self._dialeto: _Dialeto = _Postgres() if usar_postgres else _SQLite(caminho_sqlite)
         self._lock = threading.Lock()
-        self._con = self._dialeto.conectar()
+        self._pool = self._dialeto.criar_pool() if isinstance(self._dialeto, _Postgres) else None
+        self._con = None if self._pool else self._dialeto.conectar()
         # Cria as tabelas que ainda não existem (não mexe em tabelas/dados existentes).
         for comando in filter(str.strip, self._dialeto.esquema().split(";")):
             self._executar(comando)
         self._executar("INSERT INTO configuracao (id, sensibilidade, atualizado_em) VALUES (1, 0.65, ?) "
                        "ON CONFLICT (id) DO NOTHING", (_agora(),))
         self._migrar()
+        for comando in filter(str.strip, _INDICES.split(";")):
+            self._executar(comando)
+
+    @property
+    def usa_pool(self) -> bool:
+        return self._pool is not None
+
+    def fechar(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+        elif self._con is not None:
+            self._con.close()
 
     def _migrar(self) -> None:
         """Acrescenta colunas novas em tabelas que já existiam (o CREATE IF NOT EXISTS não altera tabela pronta)."""
@@ -238,20 +279,43 @@ class Banco:
         return self._dialeto.descricao()
 
     # ------------------------------------------------------------ utilitários
+    @staticmethod
+    def _buscar(cursor, buscar: str):
+        return cursor.fetchall() if buscar == "todos" else cursor.fetchone() if buscar == "um" else None
+
     def _rodar(self, sql: str, params: tuple, buscar: str):
-        """Executa com lock; se a conexão com o servidor caiu, reconecta uma vez e repete."""
+        """Executa a consulta. Postgres: pega uma conexão livre do pool. SQLite/sem pool: conexão única com trava."""
         sql, params = self._dialeto.sql(sql), self._dialeto.params(params)
+        if self._pool is not None:
+            with self._pool.connection() as con:  # devolve a conexão ao pool ao sair (e descarta se quebrou)
+                return self._buscar(con.execute(sql, params), buscar)
         with self._lock:
             for tentativa in (1, 2):
                 try:
-                    cursor = self._con.execute(sql, params)
-                    resultado = cursor.fetchall() if buscar == "todos" else cursor.fetchone() if buscar == "um" else None
+                    resultado = self._buscar(self._con.execute(sql, params), buscar)
                     self._con.commit()
                     return resultado
                 except self._dialeto.erros_conexao:
                     if tentativa == 2:
                         raise
                     self._con = self._dialeto.conectar()
+
+    def _transacao(self, comandos: List[tuple]) -> None:
+        """Executa vários (sql, params) como uma coisa só: ou todos valem, ou nenhum (rollback em erro)."""
+        convertidos = [(self._dialeto.sql(s), self._dialeto.params(p)) for s, p in comandos]
+        if self._pool is not None:
+            with self._pool.connection() as con, con.transaction():
+                for sql, params in convertidos:
+                    con.execute(sql, params)
+            return
+        with self._lock:
+            try:
+                for sql, params in convertidos:
+                    self._con.execute(sql, params)
+                self._con.commit()
+            except Exception:
+                self._con.rollback()
+                raise
 
     def _consultar(self, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
         return [{k: _para_json(v) for k, v in dict(linha).items()} for linha in self._rodar(sql, params, "todos")]
@@ -313,10 +377,32 @@ class Banco:
             return None
         fotos = [l["imagem"] for l in self._consultar(
             "SELECT imagem FROM evento WHERE camera_id = ? AND imagem IS NOT NULL", (camera_id,))]
-        self._executar("DELETE FROM alerta WHERE evento_id IN (SELECT id FROM evento WHERE camera_id = ?)", (camera_id,))
-        self._executar("DELETE FROM evento WHERE camera_id = ?", (camera_id,))
-        self._executar("DELETE FROM camera WHERE id = ?", (camera_id,))
+        # Tudo ou nada: uma falha no meio não deixa eventos sem câmera nem alertas sem evento.
+        self._transacao([
+            ("DELETE FROM alerta WHERE evento_id IN (SELECT id FROM evento WHERE camera_id = ?)", (camera_id,)),
+            ("DELETE FROM evento WHERE camera_id = ?", (camera_id,)),
+            ("DELETE FROM camera WHERE id = ?", (camera_id,)),
+        ])
         return fotos
+
+    def apagar_historico_antigo(self, dias: int) -> List[str]:
+        """
+        Retenção (LGPD): apaga alertas JÁ TRATADOS com mais de `dias` dias, seus eventos e o registro de envios de
+        push antigos. Alertas PENDENTES nunca são apagados. Devolve os caminhos das fotos para quem chamou apagar.
+        """
+        corte = _agora() - timedelta(days=dias)
+        antigos = self._consultar(
+            "SELECT e.id, e.imagem FROM evento e JOIN alerta a ON a.evento_id = e.id "
+            "WHERE e.ocorrido_em < ? AND a.status <> 'PENDENTE'", (corte,))
+        if antigos:
+            ids = [linha["id"] for linha in antigos]
+            marcadores = ", ".join("?" for _ in ids)  # só marcadores; os valores vão como parâmetros
+            self._transacao([
+                (f"DELETE FROM alerta WHERE evento_id IN ({marcadores})", tuple(ids)),
+                (f"DELETE FROM evento WHERE id IN ({marcadores})", tuple(ids)),
+            ])
+        self._executar("DELETE FROM envio_push WHERE enviado_em < ?", (corte,))
+        return [linha["imagem"] for linha in antigos if linha["imagem"]]
 
     # ------------------------------------------------------------ eventos e alertas
     def registrar_alerta(self, camera_id: int, track_id: int, tipo_logica: str,
