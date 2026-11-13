@@ -1,9 +1,14 @@
 # Dependências do modo painel (VPS). Sem MediaPipe: aqui não há câmera nem detecção.
-fastapi>=0.110
-uvicorn[standard]>=0.29
-psycopg[binary]>=3.1
+# Este arquivo diz O QUE usamos (com versões mínimas sem falhas conhecidas). A imagem Docker instala o
+# requirements-painel.lock.txt, com versões EXATAS: o mesmo build sempre gera a mesma imagem.
+# Atualizar o lock:  python deploy/atualizar_lock.py   (cria um ambiente limpo, instala e congela as versões)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
 python-dotenv>=1.0
 pywebpush>=2.0
-requests>=2.31
+requests>=2.33
+urllib3>=2.8
 numpy>=1.26
 opencv-python-headless>=4.9,<5

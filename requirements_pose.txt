@@ -4,7 +4,7 @@ mediapipe>=0.10.14
 # sobrescreverem a mesma pasta cv2. Fixado < 5 porque o OpenCV 5 ainda é recente/instável no Windows.
 opencv-contrib-python>=4.9,<5
 numpy>=1.26
-requests>=2.31
+requests>=2.33
 python-dotenv>=1.0
 pytest>=8.0
 # API + interface (servidor.py)
@@ -12,6 +12,9 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 httpx>=0.27
 # PostgreSQL (opcional: só quando o .env tiver DATABASE_URL ou PGHOST)
-psycopg[binary]>=3.1
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
 # Web Push (aviso no celular com o app fechado)
 pywebpush>=2.0
+# mínimos sem falhas conhecidas (pip-audit)
+urllib3>=2.8

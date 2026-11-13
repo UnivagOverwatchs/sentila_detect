@@ -13,8 +13,9 @@ RUN npm run build
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
-COPY deploy/requirements-painel.txt ./
-RUN pip install --no-cache-dir -r requirements-painel.txt
+# Versões EXATAS (lock): o mesmo build sempre gera a mesma imagem, e a lista passou pelo pip-audit.
+COPY deploy/requirements-painel.lock.txt ./
+RUN pip install --no-cache-dir -r requirements-painel.lock.txt
 COPY sentinela_api ./sentinela_api
 COPY sentinela_pose ./sentinela_pose
 COPY servidor.py main_pose.py ./
