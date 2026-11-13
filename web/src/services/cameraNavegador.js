@@ -20,6 +20,7 @@
 import { useSyncExternalStore } from "react";
 import { api } from "./api.js";
 import { aplicarSensibilidade, configPadrao, DetectorQueda } from "./detectorQueda.js";
+import { FilaAlertas } from "./filaAlertas.js";
 
 const FPS_COM_ESPECTADOR = 8;
 const ESPERA_SEM_ESPECTADOR_MS = 2000;
@@ -31,7 +32,9 @@ const DETECCAO_MS = 200; // ~5 análises por segundo (se o aparelho for lento, e
 const LARGURA_DETECCAO = 480; // o modelo reduz a imagem para 256 px de qualquer jeito: mandar o vídeo inteiro só gasta processador
 const FOTO_LARGURA = 960;
 const FOTO_QUALIDADE = 0.8;
-const MAX_TENTATIVAS_ALERTA = 6;
+const TEMPO_LIMITE_REDE_MS = 8000; // nenhuma chamada fica pendurada: rede ruim vira erro e a fila tenta de novo
+const FILA_MS = 1000; // a fila de alertas é conferida a cada segundo, num laço separado da detecção
+const CHAVE_APARELHO = "sentinela.aparelho";
 // Ligações do esqueleto (mesmas de sentinela_pose/pontos.py).
 const LIGACOES = [[11, 12], [23, 24], [11, 23], [12, 24], [23, 25], [25, 27], [24, 26], [26, 28], [11, 13], [13, 15], [12, 14], [14, 16]];
 const GRAVIDADE ={ normal: 0, no_chao: 1, caindo: 1, alerta: 2 };
@@ -85,10 +88,28 @@ export function mensagemDoErro(erro) {
   }
 }
 
-/** O nome do agente só aceita letras, números, espaço, ponto, hífen e sublinhado. */
-function nomeDeAgente(nome) {
-  const limpo = nome.replace(/[^\p{L}\p{N} ._-]/gu, "").trim();
-  return `Navegador - ${limpo || "aparelho"}`.slice(0, 80);
+/** Armazenamento do aparelho que nunca derruba a câmera (aba anônima/bloqueado = segue sem guardar). */
+function armazenamentoSeguro() {
+  try {
+    const teste = "__sentinela__";
+    localStorage.setItem(teste, "1");
+    localStorage.removeItem(teste);
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Identificador aleatório DESTE aparelho: dois celulares com o mesmo nome de câmera não derrubam um ao outro. */
+function idDoAparelho() {
+  const armazenamento = armazenamentoSeguro();
+  let id = armazenamento?.getItem(CHAVE_APARELHO);
+  if (!id || !/^[a-z0-9]{12,40}$/.test(id)) {
+    const bytes = crypto.getRandomValues(new Uint8Array(12));
+    id = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    armazenamento?.setItem(CHAVE_APARELHO, id);
+  }
+  return id;
 }
 
 class ControladorCamera {
@@ -112,7 +133,8 @@ class ControladorCamera {
     this._area = [];
     this._ultimoTempoVideo = -1;
     this._pessoas = [];
-    this._pendentes = [];
+    this._fila = null;
+    this._aparelho = null;
     this._desenho = null;
     this._canvasDeteccao = null;
     this._custoMedio = 0;
@@ -143,13 +165,19 @@ class ControladorCamera {
       ...opcoes,
       headers: { Authorization: `Bearer ${this._token}`, ...(json ? { "Content-Type": "application/json" } : {}), ...opcoes.headers },
       body: json ? JSON.stringify(json) : opcoes.body,
+      signal: AbortSignal.timeout?.(TEMPO_LIMITE_REDE_MS),
     });
     if (resposta.status === 401 || resposta.status === 404) {
       const erro = new Error("revogado");
       erro.revogado = true;
+      erro.status = resposta.status;
       throw erro;
     }
-    if (!resposta.ok) throw new Error(String(resposta.status));
+    if (!resposta.ok) {
+      const erro = new Error(String(resposta.status));
+      erro.status = resposta.status;
+      throw erro;
+    }
     return resposta.status === 204 ? null : resposta.json();
   }
 
@@ -174,11 +202,15 @@ class ControladorCamera {
 
     this._definir({ fase: "conectando" });
     try {
-      const nomeAgente = nomeDeAgente(nome);
-      const existente = (await api.agentes()).find((a) => a.nome === nomeAgente);
-      const agente = existente ? await api.novaChaveAgente(existente.id) : await api.criarAgente(nomeAgente);
+      this._aparelho = idDoAparelho();
+      const agente = await api.agenteNavegador(this._aparelho, nome);
       this._agente = { id: agente.id };
       this._token = agente.token;
+      // A fila carrega alertas que ficaram guardados de antes (página recarregada sem rede, por exemplo).
+      this._fila = new FilaAlertas({
+        enviar: (corpo) => this._chamar("/agente/alertas", { method: "POST", json: corpo }),
+        armazenamento: armazenamentoSeguro(),
+      });
       const camera = await this._chamar("/agente/camera", { method: "POST", json: { nome, local } });
       this._definir({ cameraId: camera.id });
     } catch (erro) {
@@ -194,6 +226,7 @@ class ControladorCamera {
     document.addEventListener("visibilitychange", this._aoMudarVisibilidade);
     this._laco(() => this._passoVideo(), 0);
     this._laco(() => this._passoStatus(), STATUS_MS);
+    this._laco(() => this._passoFila(), 0); // envio de alertas: separado da detecção, nunca a faz esperar
     this._iniciarDeteccao();
   }
 
@@ -240,7 +273,6 @@ class ControladorCamera {
   async _passoDeteccao() {
     const v = this._video;
     if (this.estado.pausada || !this._pose || !v || v.readyState < 2 || !v.videoWidth) return DETECCAO_MS;
-    await this._reenviarPendentes();
     if (v.currentTime === this._ultimoTempoVideo) return DETECCAO_MS; // quadro repetido
     this._ultimoTempoVideo = v.currentTime;
 
@@ -310,25 +342,16 @@ class ControladorCamera {
         imagem_jpeg_b64: foto,
         detalhes: { ...alerta.detalhes, origem: "navegador" },
       },
-      tentativas: 0,
     };
     this._definir({ ultimoAlerta: { tipo: alerta.tipo, quando: Date.now() } });
-    this._pendentes.push(item);
-    await this._reenviarPendentes();
+    this._fila.adicionar(item.corpo);
+    this._fila.processar().catch(() => {}); // tenta já; se falhar, o laço da fila tenta de novo (sem segurar a detecção)
   }
 
-  /** Tenta mandar os alertas que ainda não subiram (rede caiu); só esta página guarda a fila. */
-  async _reenviarPendentes() {
-    for (const item of [...this._pendentes]) {
-      try {
-        await this._chamar("/agente/alertas", { method: "POST", json: item.corpo });
-        this._pendentes.splice(this._pendentes.indexOf(item), 1);
-      } catch (erro) {
-        if (erro?.revogado) throw erro;
-        item.tentativas += 1;
-        if (item.tentativas >= MAX_TENTATIVAS_ALERTA) this._pendentes.splice(this._pendentes.indexOf(item), 1);
-      }
-    }
+  /** Laço da fila de alertas: 401 sobe para o _laco, que para a câmera (o alerta continua guardado no aparelho). */
+  async _passoFila() {
+    await this._fila?.processar();
+    return FILA_MS;
   }
 
   _aoMudarVisibilidade = () => {
@@ -498,7 +521,7 @@ class ControladorCamera {
     this._canvasDeteccao = null;
     this._custoMedio = 0;
     this._amostras = 0;
-    this._pendentes = [];
+    this._fila = null; // alertas não enviados continuam guardados no aparelho e saem na próxima vez
     this._ultimoTempoVideo = -1;
     try {
       await this._wakeLock?.release();
@@ -506,11 +529,11 @@ class ControladorCamera {
       /* já liberado */
     }
     this._wakeLock = null;
-    if (this._agente) {
+    if (this._agente && this._aparelho) {
       try {
-        await api.atualizarAgente(this._agente.id, false); // a chave não fica valendo depois de parar
+        await api.encerrarAgenteNavegador(this._aparelho); // a chave não fica valendo depois de parar
       } catch {
-        /* sem rede ou sem permissão: a chave só existia nesta página */
+        /* sem rede: a chave só existia nesta página */
       }
     }
     this._agente = null;

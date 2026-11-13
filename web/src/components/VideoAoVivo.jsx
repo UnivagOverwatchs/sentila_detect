@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api.js";
 
+const TEMPO_LIMITE_QUADRO_MS = 5000;
 const FALHAS_PARA_AVISAR = 5;
 
 export function VideoAoVivo({ alt, fps = 12, cameraId, aoMudarDisponibilidade }) {
@@ -32,7 +33,11 @@ export function VideoAoVivo({ alt, fps = 12, cameraId, aoMudarDisponibilidade })
       const inicio = performance.now();
       if (document.visibilityState === "visible") {
         try {
-          const resposta = await fetch(api.urlQuadro(cameraId), { cache: "no-store", signal: controle.signal });
+          // Cada quadro tem no máximo 5 s: um pedido "pendurado" não congela o vídeo (conta como falha e segue).
+          const limite = AbortSignal.any && AbortSignal.timeout
+            ? AbortSignal.any([controle.signal, AbortSignal.timeout(TEMPO_LIMITE_QUADRO_MS)])
+            : controle.signal;
+          const resposta = await fetch(api.urlQuadro(cameraId), { cache: "no-store", signal: limite });
           if (!resposta.ok) throw new Error(String(resposta.status));
           const url = URL.createObjectURL(await resposta.blob());
           if (!ativo) return URL.revokeObjectURL(url);
