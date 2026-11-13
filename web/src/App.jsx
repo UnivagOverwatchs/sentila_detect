@@ -7,7 +7,7 @@
  * 2. Abre o WebSocket (useTempoReal): recebe o status a cada 1 s e os alertas na hora.
  * 3. Alerta novo -> entra na fila e abre a TELA CHEIA vermelha + som + vibração + notificação.
  * 4. Tratar alerta (Resolver/Falso alarme) -> PATCH na API, sai da fila, lista atualiza.
- * 5. Navegação por hash (#/painel, #/historico, #/cameras, #/config): funciona offline e
+ * 5. Navegação por hash (#/painel, #/monitor, #/historico, #/cameras, #/config): funciona offline e
  *    sem configurar rotas no servidor.
  * 6. Sem conexão: mostra os últimos alertas salvos no aparelho (RF15).
  */
@@ -17,6 +17,7 @@ import { AlertaTelaCheia } from "./components/AlertaTelaCheia.jsx";
 import { Painel } from "./pages/Painel.jsx";
 import { Historico } from "./pages/Historico.jsx";
 import { Cameras } from "./pages/Cameras.jsx";
+import { Monitor } from "./pages/Monitor.jsx";
 import { Configuracoes } from "./pages/Configuracoes.jsx";
 import { Login } from "./pages/Login.jsx";
 import { useTempoReal } from "./hooks/useTempoReal.js";
@@ -27,6 +28,7 @@ import { avisarAlerta, liberarAudio } from "./services/aviso.js";
 
 const TITULOS = {
   painel: ["Painel de monitoramento", "Visão em tempo real dos ambientes"],
+  monitor: ["Monitor", "Os idosos estão bem? Tela para deixar aberta na TV"],
   historico: ["Histórico de alertas", "Eventos detectados e seu status"],
   cameras: ["Câmeras", "Adicionar, editar e acompanhar as câmeras"],
   config: ["Configurações", "Sensibilidade, contatos, usuários e aparelhos"],
@@ -247,6 +249,9 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
             aoTratar={tratarAlerta}
           />
         )}
+        {pagina === "monitor" && (
+          <Monitor cameras={cameras} estadoCameras={status?.cameras} alertas={alertas} aoTratar={tratarAlerta} conectado={conectado} />
+        )}
         {pagina === "historico" && <Historico alertas={alertas} aoTratar={tratarAlerta} offline={offline} />}
         {pagina === "cameras" && (
           <Cameras
@@ -290,7 +295,8 @@ function Aplicativo({ usuario, loginObrigatorio, aoSair }) {
         </div>
       )}
 
-      {alertaAberto && (
+      {/* Na tela Monitor o próprio quadro da câmera fica vermelho (som e notificação continuam). */}
+      {alertaAberto && pagina !== "monitor" && (
         <AlertaTelaCheia
           alerta={alertaAberto}
           contatoEmergencia={contatos[0]}
