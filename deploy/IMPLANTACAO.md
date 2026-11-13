@@ -160,21 +160,21 @@ chaves VAPID. Os celulares se cadastram **no endereço novo** (Configurações �
 
 ## 10. Avisos por WhatsApp (opcional, repositório `sentinela_whatsapp`)
 
-O notificador (`UnivagOverwatchs/sentinela_whatsapp`) roda em containers próprios (`whatsapp-api` + `notificador`),
-lê o **mesmo PostgreSQL** e envia a mensagem aos contatos de emergência. Quem detecta (o computador com a câmera)
-apenas o acorda por `POST /notificar`; o painel da VPS **não** detecta nem avisa, só mostra os alertas.
+O notificador (`UnivagOverwatchs/sentinela_whatsapp`) roda em containers próprios (`whatsapp-api` + `notificador`)
+**na mesma VPS**, lê o **mesmo PostgreSQL** e envia a mensagem aos contatos de emergência. Quando um agente envia um
+alerta, o **painel** acorda o notificador por `POST /notificar` (e avisa "câmera sem sinal" por `POST /aviso`).
 
 1. Suba o notificador seguindo o README daquele repositório (`compose.servidor.yaml`, `.env` com `PG*`,
-   `NOTIF_TOKEN` e `--parear` para o QR Code na primeira vez).
-2. No `.env` do **computador que detecta**, defina `NOTIFICADOR_URL=http://<servidor-do-notificador>:8100` e
-   `NOTIFICADOR_TOKEN=<o mesmo NOTIF_TOKEN>`. Deixe `WHATSAPP_URL` vazio, senão a mensagem sai em dobro.
-3. Libere a porta 8100 no firewall só para o IP do computador que detecta.
-4. Teste: `curl http://<servidor>:8100/saude` deve mostrar `"whatsapp_conectado": true`.
+   `NOTIF_TOKEN` e `--parear` para o QR Code na primeira vez). O compose já publica a porta só em
+   `127.0.0.1:8100` (fechada para a internet: o token não trafega aberto) e monta a pasta de fotos do painel
+   **só para leitura**, para a mensagem sair com a foto mesmo com o login ligado.
+2. No `.env` do **painel** (`/opt/sentinela/.env`), defina `NOTIFICADOR_URL=http://127.0.0.1:8100` e
+   `NOTIFICADOR_TOKEN=<o mesmo NOTIF_TOKEN>`; recrie o container do painel.
+3. Teste: `curl http://127.0.0.1:8100/saude` (na VPS) deve mostrar `"whatsapp_conectado": true`.
 
 Se o aviso imediato falhar, o notificador encontra o alerta sozinho no banco em poucos segundos.
-Com o **agente de visão** (seção 9), as fotos ficam no painel; aponte `SENTINELA_API_URL` do notificador para
-`https://painel.sentinelaunivag.com.br` se ele precisar anexar a foto. No fluxo antigo, a foto só entra na mensagem se o
-notificador alcançar a API do computador que detecta.
+No fluxo antigo (computador gravando direto no banco), defina `NOTIFICADOR_URL` nele também; nesse caso a porta
+8100 precisa ficar acessível para ele (publique `8100:8100` e libere no firewall **só para o IP dele**).
 
 ## Atualizar depois
 
@@ -198,11 +198,32 @@ systemctl reload httpd
 
 Os outros containers (`sentinela`, `sentinela-dashboard` etc.) não são tocados em nenhum passo.
 
-## Depois do painel no ar (próxima etapa de segurança)
+## Depois do painel no ar (segurança da VPS)
 
-- Trocar a senha do root e a do Postgres.
-- Prender o Postgres a `127.0.0.1` (hoje `0.0.0.0:5432` está aberto à internet): exige recriar o container
-  `sentinela` com `-p 127.0.0.1:5432:5432`, reaproveitando o mesmo volume, **depois de um `pg_dump`**.
-  Atenção: o computador com a câmera deixa de alcançar o banco direto; ele precisará de um túnel SSH ou do
-  endpoint de envio (próximo PR).
-- Revisar o firewall (FTP, e-mail, DNS, cockpit e portas altas abertas).
+Faça nesta ordem, **com um backup feito antes** (seção "Backup"):
+
+1. **Trocar as senhas** do root e do Postgres (`ALTER USER sentinelas PASSWORD '...';` e atualizar os `.env`).
+2. **Fechar o Postgres para a internet** (hoje `0.0.0.0:5432` está aberto): recrie o container `sentinela`
+   publicando só no próprio servidor, reaproveitando o mesmo volume de dados:
+   ```bash
+   docker inspect sentinela --format '{{json .Mounts}}'      # anote o volume/pasta dos dados
+   docker stop sentinela && docker rename sentinela sentinela-antigo
+   docker run -d --name sentinela --restart unless-stopped -p 127.0.0.1:5432:5432 \
+     -v <MESMO_VOLUME>:/var/lib/postgresql/data <MESMA_IMAGEM_E_VARIAVEIS_DO_ANTIGO>
+   # conferiu que o painel funciona? então:  docker rm sentinela-antigo
+   ```
+   Com o **agente de visão**, nenhum computador externo precisa do banco. Computadores do fluxo antigo passam a usar
+   um túnel SSH (`ssh -N -L 5432:127.0.0.1:5432 usuario@VPS`) ou migram para o agente.
+3. **Firewall: só o necessário aberto** (AlmaLinux usa firewalld):
+   ```bash
+   firewall-cmd --list-all                                   # veja o que está aberto hoje
+   for s in ftp smtp pop3 imap dns cockpit; do firewall-cmd --permanent --remove-service=$s; done
+   firewall-cmd --permanent --add-service=ssh --add-service=http --add-service=https
+   firewall-cmd --permanent --remove-port=5432/tcp           # e as "portas altas" que aparecerem na lista
+   firewall-cmd --reload && firewall-cmd --list-all
+   ```
+   Atenção: o Docker publica portas por fora do firewalld; por isso o item 2 (publicar só em 127.0.0.1) é essencial.
+4. **SSH contra força bruta**: `dnf install -y epel-release fail2ban && systemctl enable --now fail2ban`
+   (a configuração padrão já protege o `sshd`). Se possível, entre só com chave (`PasswordAuthentication no`).
+5. **CSP**: depois de usar o painel e a câmera do navegador por alguns dias sem avisos de CSP no console,
+   troque `Content-Security-Policy-Report-Only` por `Content-Security-Policy` no `zz-sentinela-painel-443.conf`.
